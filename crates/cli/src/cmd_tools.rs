@@ -92,11 +92,22 @@ pub async fn arb_scan(a: ArbScanArgs) -> Result<()> {
     let gamma = GammaClient::new()?;
     let clob = ClobClient::new()?;
 
-    // 1. Polymarket multi-outcome (negRisk) events: Σ YES asks < 1 or Σ NO asks < N-1
+    // 1. Polymarket multi-outcome (negRisk) events: Σ YES asks < 1 or Σ NO asks < N-1.
+    //    Only `negRisk` events are true partitions (exactly one outcome pays). Everything
+    //    else (match sub-markets, "hits $X" ladders, "by <date>" ladders) is NOT, so summing
+    //    their prices is meaningless.
     let events = gamma.events(a.events, 0).await?;
     let mut scanned = 0;
     let mut found = 0;
-    for ev in events.iter().filter(|e| e.markets.len() >= 3) {
+    let now = chrono::Utc::now();
+    for ev in events.iter().filter(|e| e.neg_risk && e.markets.len() >= 3) {
+        let days_to_resolve = ev
+            .end_date
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| (d.with_timezone(&chrono::Utc) - now).num_seconds() as f64 / 86_400.0)
+            .unwrap_or(365.0)
+            .max(1.0);
         let tokens: Vec<String> = ev.markets.iter().filter_map(|m| m.yes_token()).collect();
         if tokens.len() != ev.markets.len() {
             continue;
@@ -119,23 +130,22 @@ pub async fn arb_scan(a: ArbScanArgs) -> Result<()> {
         let fee = ev.markets.first().map(|m| m.fee_model()).unwrap_or(FeeModel::None);
         if let Some(sig) = multi_outcome_arb(&legs, &fee, a.min_profit) {
             found += 1;
-            match sig {
-                ArbSignal::BuyAllYes { cost, fees, profit } => println!(
-                    "[POLY multi-outcome] {} ({} legs): BUY ALL YES cost {cost:.4} fees {fees:.4} => +{profit:.4}/set  https://polymarket.com/event/{}",
-                    ev.title,
-                    legs.len(),
-                    ev.slug
-                ),
-                ArbSignal::BuyAllNo { cost, fees, profit } => println!(
-                    "[POLY multi-outcome] {} ({} legs): BUY ALL NO cost {cost:.4} fees {fees:.4} => +{profit:.4}/set  https://polymarket.com/event/{}",
-                    ev.title,
-                    legs.len(),
-                    ev.slug
-                ),
-            }
+            let (side, cost, fees, profit) = match sig {
+                ArbSignal::BuyAllYes { cost, fees, profit } => ("BUY ALL YES", cost, fees, profit),
+                ArbSignal::BuyAllNo { cost, fees, profit } => ("BUY ALL NO ", cost, fees, profit),
+            };
+            let ann = profit / cost * 365.0 / days_to_resolve;
+            println!(
+                "[POLY negRisk] {} ({} legs, {:.0}d): {side} cost {cost:.4} fees {fees:.4} => +{profit:.4}/set ({:.1}% ann.)  https://polymarket.com/event/{}",
+                ev.title,
+                legs.len(),
+                days_to_resolve,
+                ann * 100.0,
+                ev.slug
+            );
         }
     }
-    println!("scanned {scanned} multi-outcome events, {found} opportunities ≥ {:.3}", a.min_profit);
+    println!("scanned {scanned} negRisk events, {found} opportunities ≥ {:.3}/set (before slippage across all legs)", a.min_profit);
 
     // 2. explicit Kalshi/Polymarket pairs
     if !a.pairs.is_empty() {
