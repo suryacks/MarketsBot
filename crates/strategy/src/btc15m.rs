@@ -389,6 +389,42 @@ impl Strategy for Btc15mStrategy {
         }
     }
 
+    fn snapshot(&self) -> serde_json::Value {
+        let now = self.spot.map(|(t, _)| t).unwrap_or(0);
+        let markets: Vec<serde_json::Value> = self
+            .active
+            .iter()
+            .map(|(t, a)| {
+                serde_json::json!({
+                    "ticker": t,
+                    "strike": a.strike,
+                    "open_ts_ms": a.open_ts_ms,
+                    "close_ts_ms": a.close_ts_ms,
+                    "fair": self.fair(t, now),
+                    "entries": a.entries,
+                    "notional": a.notional,
+                    "bid_quote": a.bid_order.map(|(_, p)| p.to_f64()),
+                    "ask_quote": a.ask_order.map(|(_, p)| p.to_f64()),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "kind": "btc15m",
+            "mode": if self.cfg.maker { "maker" } else { "taker" },
+            "series": self.cfg.series,
+            "spot": self.spot.map(|(_, p)| p),
+            "spot_ts_ms": self.spot.map(|(t, _)| t),
+            "sigma_annual": self.vol.sigma_annual(),
+            "implied_annual": self.vol.implied_annual(),
+            "basis": self.effective_basis(),
+            "basis_samples": self.basis.samples(),
+            "market_blend": self.cfg.market_blend,
+            "min_edge": self.cfg.min_edge,
+            "stats": {"evaluations": self.stats.evaluations, "signals": self.stats.signals, "orders": self.stats.orders},
+            "markets": markets,
+        })
+    }
+
     fn on_fill(&mut self, fill: &Fill, _ctx: &mut dyn Context) {
         if let Some(a) = self.active.get_mut(&fill.ticker) {
             let cost = match fill.action {

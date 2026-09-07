@@ -1,5 +1,6 @@
 mod cmd_backtest;
 mod cmd_calibrate;
+mod cmd_dashboard;
 mod cmd_history;
 mod cmd_live;
 mod cmd_tools;
@@ -34,6 +35,8 @@ enum Cmd {
     ArbScan(cmd_tools::ArbScanArgs),
     /// Show Kalshi account balance/positions (needs API keys).
     Account,
+    /// Local web dashboard: live runs, positions, fills, backtests, data, logs (http://localhost:8080).
+    Dashboard(cmd_dashboard::Args),
 }
 
 #[tokio::main]
@@ -55,5 +58,6 @@ async fn main() -> Result<()> {
         Cmd::Book(a) => cmd_tools::book(a).await,
         Cmd::ArbScan(a) => cmd_tools::arb_scan(a).await,
         Cmd::Account => cmd_tools::account().await,
+        Cmd::Dashboard(a) => cmd_dashboard::run(a).await,
     }
 }

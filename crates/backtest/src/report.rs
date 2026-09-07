@@ -121,6 +121,18 @@ impl Report {
         )
     }
 
+    pub fn write_json(&self, path: impl AsRef<Path>, params: serde_json::Value) -> anyhow::Result<()> {
+        let path = path.as_ref();
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let mut v = serde_json::to_value(self)?;
+        v["params"] = params;
+        v["created_ms"] = serde_json::json!(chrono::Utc::now().timestamp_millis());
+        std::fs::write(path, serde_json::to_vec_pretty(&v)?)?;
+        Ok(())
+    }
+
     pub fn write_csv(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         let path = path.as_ref();
         if let Some(p) = path.parent() {

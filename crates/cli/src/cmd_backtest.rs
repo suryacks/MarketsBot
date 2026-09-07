@@ -164,6 +164,13 @@ pub async fn run(a: Args) -> Result<()> {
             a.latency_ms
         );
         report.write_csv(a.report.join(format!("{tag}-markets.csv")))?;
+        report.write_json(
+            a.report.join(format!("{tag}.json")),
+            serde_json::json!({"series": a.series, "from": a.from, "to": a.to, "mode": a.mode, "ref_source": a.ref_source,
+                               "latency_ms": a.latency_ms, "edge": edge, "maker": cfg.maker, "min_tau_secs": cfg.min_tau_secs,
+                               "vol_source": cfg.vol_source, "blend": cfg.market_blend, "bankroll": a.bankroll,
+                               "maker_touch_fill_prob": a.maker_touch_fill_prob}),
+        )?;
         mb_backtest::Report::write_fills_csv(a.report.join(format!("{tag}-fills.csv")), bt.fills())?;
         summary_rows.push((edge, report.markets_traded, report.n_fills, report.net_pnl, report.fees, report.win_rate, report.max_drawdown, report.pnl_per_contract));
     }

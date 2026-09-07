@@ -9,6 +9,7 @@ publish.workspace = true
 mb-core.workspace = true
 mb-data.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 chrono.workspace = true

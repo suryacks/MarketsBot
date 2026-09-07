@@ -1,6 +1,6 @@
 use crate::report::Report;
 use crate::sim::SimExchange;
-use mb_core::{Fill, MarketEvent, Strategy};
+use mb_core::{Context as _, Fill, MarketEvent, Strategy};
 use std::collections::HashMap;
 use tracing::info;
 
@@ -57,6 +57,96 @@ impl Backtester {
 
     pub fn fills(&self) -> &[Fill] {
         &self.fills
+    }
+
+    /// Dashboard snapshot of everything the engine knows.
+    pub fn state(&self, run_id: &str, mode: &str, initial_cash: mb_core::Fp, started_ms: i64) -> serde_json::Value {
+        use serde_json::json;
+        let now = chrono::Utc::now().timestamp_millis();
+        let positions: Vec<serde_json::Value> = self
+            .sim
+            .positions()
+            .values()
+            .filter(|p| !p.yes_qty.is_zero() || p.n_fills > 0)
+            .map(|p| {
+                let mid = self.sim.book(&p.ticker).and_then(|b| b.mid());
+                let mtm = mid.map(|m| p.mtm(m)).unwrap_or(p.cash);
+                json!({
+                    "ticker": p.ticker, "yes_qty": p.yes_qty.to_f64(), "cash": p.cash.to_f64(),
+                    "fees": p.fees.to_f64(), "n_fills": p.n_fills, "volume": p.volume.to_f64(),
+                    "mid": mid.map(|m| m.to_f64()), "mtm": mtm.to_f64(),
+                    "close_ts_ms": self.close_ts.get(&p.ticker),
+                })
+            })
+            .collect();
+        let unrealized: f64 = positions.iter().map(|p| p["mtm"].as_f64().unwrap_or(0.0)).sum();
+        let settled: Vec<serde_json::Value> = self
+            .sim
+            .settled
+            .iter()
+            .map(|(t, r, p, pnl)| {
+                json!({"ticker": t, "result": r.as_str(), "pnl": pnl.to_f64(), "fees": p.fees.to_f64(),
+                       "n_fills": p.n_fills, "volume": p.volume.to_f64(), "close_ts_ms": self.close_ts.get(t)})
+            })
+            .collect();
+        let settled_pnl: f64 = settled.iter().map(|s| s["pnl"].as_f64().unwrap_or(0.0)).sum();
+        let fills: Vec<serde_json::Value> = self
+            .fills
+            .iter()
+            .rev()
+            .take(200)
+            .map(|f| {
+                json!({"ts_ms": f.ts_ms, "ticker": f.ticker, "action": format!("{:?}", f.action), "yes_px": f.yes_px.to_f64(),
+                       "qty": f.qty.to_f64(), "fee": f.fee.to_f64(), "is_maker": f.is_maker, "tag": f.tag})
+            })
+            .collect();
+        let open_orders: Vec<serde_json::Value> = self
+            .sim
+            .resting_orders()
+            .iter()
+            .map(|(id, r, rem, ahead)| {
+                json!({"id": id.0, "ticker": r.ticker, "action": format!("{:?}", r.action), "yes_px": r.yes_px.to_f64(),
+                       "qty": r.qty.to_f64(), "remaining": rem.to_f64(), "ahead": ahead.to_f64(), "tag": r.tag})
+            })
+            .collect();
+        let books: serde_json::Map<String, serde_json::Value> = self
+            .sim
+            .books()
+            .iter()
+            .map(|(t, b)| {
+                (
+                    t.clone(),
+                    json!({"bid": b.best_bid().map(|(p, q)| [p.to_f64(), q.to_f64()]), "ask": b.best_ask().map(|(p, q)| [p.to_f64(), q.to_f64()]),
+                           "mid": b.mid().map(|m| m.to_f64()), "ts_ms": b.ts_ms}),
+                )
+            })
+            .collect();
+        let qs = &self.sim.queue_stats;
+        let wins = settled.iter().filter(|s| s["pnl"].as_f64().unwrap_or(0.0) > 0.0).count();
+        json!({
+            "run_id": run_id, "mode": mode, "strategy": self.strategy.name(),
+            "started_ms": started_ms, "updated_ms": now,
+            "initial_cash": initial_cash.to_f64(), "cash": self.sim.total_cash().to_f64(), "free_cash": self.sim.free_cash().to_f64(),
+            "settled_pnl": settled_pnl, "unrealized": unrealized,
+            "equity": self.sim.total_cash().to_f64() + unrealized,
+            "n_fills": self.fills.len(), "markets_seen": self.markets_seen,
+            "settled_count": settled.len(), "settled_wins": wins,
+            "positions": positions, "settled": settled, "fills": fills, "open_orders": open_orders, "books": books,
+            "queue": {"rested": qs.orders_rested, "avg_ahead": if qs.orders_rested > 0 { qs.ahead_at_insert / qs.orders_rested as f64 } else { 0.0 },
+                      "reached_front": qs.reached_front, "fills_at_price": qs.fills_at_price, "fills_through": qs.fills_through},
+            "strategy_state": self.strategy.snapshot(),
+        })
+    }
+
+    /// Atomically write `state()` to `path` (tmp + rename).
+    pub fn write_state(path: &std::path::Path, state: &serde_json::Value) -> anyhow::Result<()> {
+        if let Some(p) = path.parent() {
+            std::fs::create_dir_all(p)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec(state)?)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
     }
 
     pub fn report(&self, initial_cash: mb_core::Fp) -> Report {

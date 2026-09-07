@@ -162,4 +162,8 @@ pub trait Strategy: Send {
     fn name(&self) -> &str;
     fn on_event(&mut self, ev: &MarketEvent, ctx: &mut dyn Context);
     fn on_fill(&mut self, _fill: &Fill, _ctx: &mut dyn Context) {}
+    /// Free-form introspection for dashboards (per-market fair values, model state, …).
+    fn snapshot(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
 }

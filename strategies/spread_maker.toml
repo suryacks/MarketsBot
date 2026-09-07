@@ -1,0 +1,14 @@
+# Model-free thin-book market maker (see crates/strategy/src/spread_maker.rs).
+# Hypothesis: daily weather buckets have wide spreads relative to price and slow adverse selection.
+
+series = ["KXHIGHNY", "KXHIGHCHI", "KXHIGHMIA", "KXHIGHLAX", "KXHIGHAUS", "KXHIGHPHIL", "KXHIGHDEN"]
+half_spread = 0.01
+quote_qty = 5.0
+max_inventory = 25.0
+skew_per_contract = 0.001
+min_tau_secs = 1800
+max_market_spread = 0.10
+min_price = 0.05
+max_price = 0.95
+requote_ms = 2000
+max_markets = 200

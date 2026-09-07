@@ -73,6 +73,15 @@ pub struct PaperArgs {
     /// Override config: realized | implied | max | mean
     #[arg(long)]
     pub vol_source: Option<String>,
+    /// btc15m | spread-maker
+    #[arg(long, default_value = "btc15m")]
+    pub strategy: String,
+    /// Name for this run (dashboard); default derived from strategy + time
+    #[arg(long)]
+    pub run_id: Option<String>,
+    /// Where live state snapshots go (read by `mbot dashboard`)
+    #[arg(long, default_value = "data/state")]
+    pub state_dir: PathBuf,
 }
 
 pub struct Feeds {
@@ -343,44 +352,75 @@ pub async fn collect(a: CollectArgs) -> Result<()> {
     Ok(())
 }
 
+/// Build the strategy named by `--strategy`, applying CLI overrides.
+pub fn build_strategy(a: &PaperArgs) -> Result<(Box<dyn mb_core::Strategy>, String)> {
+    match a.strategy.as_str() {
+        "spread-maker" | "spread_maker" => {
+            let path = if a.config.to_string_lossy().contains("btc15m") { PathBuf::from("strategies/spread_maker.toml") } else { a.config.clone() };
+            let mut cfg = if path.exists() { mb_strategy::SpreadMakerConfig::load(&path)? } else { mb_strategy::SpreadMakerConfig::default() };
+            if !a.feed.series.is_empty() && a.feed.series != vec!["KXBTC15M".to_string()] {
+                cfg.series = a.feed.series.clone();
+            }
+            let series = cfg.series.join(",");
+            Ok((Box::new(mb_strategy::SpreadMaker::new(cfg)), series))
+        }
+        _ => {
+            let mut cfg = if a.config.exists() { Btc15mConfig::load(&a.config)? } else { Btc15mConfig::default() };
+            if let Some(s) = a.feed.series.first() {
+                cfg.series = s.clone();
+            }
+            if a.maker {
+                cfg.maker = true;
+            }
+            if let Some(b) = a.blend {
+                cfg.market_blend = b;
+            }
+            if let Some(v) = &a.vol_source {
+                cfg.vol_source = v.clone();
+            }
+            let series = cfg.series.clone();
+            Ok((Box::new(Btc15mStrategy::new(cfg)), series))
+        }
+    }
+}
+
 pub async fn paper(a: PaperArgs) -> Result<()> {
-    let mut cfg = if a.config.exists() { Btc15mConfig::load(&a.config)? } else { Btc15mConfig::default() };
-    if let Some(s) = a.feed.series.first() {
-        cfg.series = s.clone();
-    }
-    if a.maker {
-        cfg.maker = true;
-    }
-    if let Some(b) = a.blend {
-        cfg.market_blend = b;
-    }
-    if let Some(v) = &a.vol_source {
-        cfg.vol_source = v.clone();
-    }
+    let (strat, series_label) = build_strategy(&a)?;
+    let run_id = a
+        .run_id
+        .clone()
+        .unwrap_or_else(|| format!("paper-{}-{}", strat.name(), chrono::Utc::now().format("%Y%m%d-%H%M")));
+    let started_ms = chrono::Utc::now().timestamp_millis();
+    let state_path = a.state_dir.join(format!("{run_id}.json"));
     let mut feeds = start_feeds(&a.feed).await?;
+    let default_fee = feeds.fee_models.values().next().cloned().unwrap_or_else(FeeModel::kalshi_default);
     let mut sim = SimExchange::new(SimConfig {
         mode: FillMode::Book,
         latency_ms: a.latency_ms,
         touch_ttl_ms: 2_000,
         initial_cash: Fp::from_f64(a.bankroll),
-        default_fee: feeds.fee_models.get(&cfg.series).cloned().unwrap_or_else(FeeModel::kalshi_default),
+        default_fee,
         maker_touch_fill_prob: 0.5,
     });
     for (s, fm) in &feeds.fee_models {
         sim.set_fee_model(s, fm.clone());
     }
-    let strat = Btc15mStrategy::new(cfg.clone());
-    let mut bt = Backtester::new(sim, Box::new(strat));
+    let mut bt = Backtester::new(sim, strat);
     let mut rec = a.record.as_ref().map(|p| Recorder::new(p, 60, 200_000));
-    info!(series = %cfg.series, bankroll = a.bankroll, authenticated = feeds.authenticated, "paper trading… Ctrl-C to stop");
+    info!(run_id, series = %series_label, bankroll = a.bankroll, authenticated = feeds.authenticated, state = %state_path.display(), "paper trading… Ctrl-C to stop");
     if !feeds.authenticated {
         warn!("no Kalshi API keys: using 1 Hz REST polling (touch only). Set KALSHI_API_KEY_ID / KALSHI_PRIVATE_KEY_PATH for full WebSocket books.");
     }
 
     let mut n_fills = 0usize;
     let mut last_log = std::time::Instant::now();
+    let mut state_tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
+            _ = state_tick.tick() => {
+                let st = bt.state(&run_id, "paper", Fp::from_f64(a.bankroll), started_ms);
+                if let Err(e) = Backtester::write_state(&state_path, &st) { warn!(error = %e, "state write failed"); }
+            }
             ev = feeds.rx.recv() => {
                 let Some(ev) = ev else { break };
                 if let Some(r) = rec.as_mut() { r.record(&ev)?; }
@@ -409,6 +449,9 @@ pub async fn paper(a: PaperArgs) -> Result<()> {
     if let Some(r) = rec.as_mut() {
         r.flush()?;
     }
+    let mut st = bt.state(&run_id, "paper", Fp::from_f64(a.bankroll), started_ms);
+    st["stopped_ms"] = serde_json::json!(chrono::Utc::now().timestamp_millis());
+    let _ = Backtester::write_state(&state_path, &st);
     let report = bt.report(Fp::from_f64(a.bankroll));
     println!("\n{}", report.summary());
     Ok(())

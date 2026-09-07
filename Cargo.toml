@@ -40,6 +40,7 @@ toml = "0.8"
 dotenvy = "0.15"
 libm = "0.2"
 url = "2"
+axum = "0.8"
 
 [profile.release]
 opt-level = 3

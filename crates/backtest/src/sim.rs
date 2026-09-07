@@ -223,6 +223,15 @@ impl SimExchange {
         &self.positions
     }
 
+    pub fn books(&self) -> &HashMap<String, Orderbook> {
+        &self.books
+    }
+
+    /// Every resting order: (id, request, remaining, contracts ahead in queue).
+    pub fn resting_orders(&self) -> Vec<(OrderId, OrderRequest, Fp, Fp)> {
+        self.resting.iter().map(|(id, r)| (*id, r.req.clone(), r.remaining, r.ahead)).collect()
+    }
+
     pub fn drain_fills(&mut self) -> Vec<Fill> {
         std::mem::take(&mut self.fills)
     }

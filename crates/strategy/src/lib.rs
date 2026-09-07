@@ -6,7 +6,9 @@ pub mod basis;
 pub mod btc15m;
 pub mod config;
 pub mod fair_value;
+pub mod spread_maker;
 pub mod vol;
 
 pub use btc15m::Btc15mStrategy;
 pub use config::Btc15mConfig;
+pub use spread_maker::{SpreadMaker, SpreadMakerConfig};
