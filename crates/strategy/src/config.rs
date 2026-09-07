@@ -20,6 +20,9 @@ pub struct Btc15mConfig {
     pub max_notional_per_market: f64,
     /// Max contracts in a single order.
     pub max_order_qty: f64,
+    /// Min contracts in a single taker order. Kalshi rounds each order's fee up to the
+    /// cent, so 1-lots pay several times the nominal rate.
+    pub min_order_qty: f64,
     /// Stop trading this many seconds before close (settlement window is the last 60s).
     pub no_trade_last_secs: i64,
     /// Don't trade in the first N seconds after open (book is still forming).
@@ -63,6 +66,7 @@ impl Default for Btc15mConfig {
             max_contracts_per_market: 200.0,
             max_notional_per_market: 100.0,
             max_order_qty: 50.0,
+            min_order_qty: 5.0,
             no_trade_last_secs: 75,
             warmup_secs: 5,
             vol_lambda: 0.97,

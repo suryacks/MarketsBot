@@ -74,9 +74,15 @@ pub struct Feeds {
 
 pub async fn start_feeds(a: &FeedArgs) -> Result<Feeds> {
     let (tx, rx) = mpsc::channel::<MarketEvent>(65_536);
-    let client = KalshiClient::from_env()?;
-    let authenticated = client.is_authenticated();
-    info!(base = client.base(), authenticated, "kalshi client");
+    // Market data should be *production* prices even when orders go to demo. Keys are
+    // environment-specific, so with demo keys the WebSocket necessarily shows demo books.
+    let env_client = KalshiClient::from_env()?;
+    let authenticated = env_client.is_authenticated();
+    let client = if authenticated { env_client } else { KalshiClient::public_prod()? };
+    info!(base = client.base(), authenticated, "kalshi market-data client");
+    if authenticated && client.base().contains("demo") {
+        warn!("KALSHI_ENV=demo with keys: streaming DEMO books (paper prices). Use prod keys for real market data.");
+    }
 
     // per-series fee models
     let mut fee_models = HashMap::new();
@@ -155,6 +161,7 @@ async fn discovery_loop(
 ) -> Result<()> {
     let mut known: HashMap<String, mb_core::MarketInfo> = HashMap::new();
     let mut settled: HashSet<String> = HashSet::new();
+    let mut ignored: HashSet<String> = HashSet::new();
     let mut last_trade_ts: HashMap<String, i64> = HashMap::new();
     let mut seen_trade_ids: HashSet<String> = HashSet::new();
     let mut last_discovery = std::time::Instant::now() - discover_every;
@@ -175,6 +182,15 @@ async fn discovery_loop(
                     Ok(ms) => {
                         for m in ms {
                             let info = m.to_info();
+                            if ignored.contains(&info.ticker) {
+                                continue;
+                            }
+                            // stale/zombie listings: no strike or closed long ago
+                            if info.floor_strike.is_none() || info.close_ts_ms < chrono::Utc::now().timestamp_millis() - 60 * 60_000 {
+                                warn!(ticker = %info.ticker, status = %info.status, "ignoring market without strike / already closed");
+                                ignored.insert(info.ticker.clone());
+                                continue;
+                            }
                             open_tickers.push(info.ticker.clone());
                             let is_new = !known.contains_key(&info.ticker);
                             if is_new || known.get(&info.ticker).is_some_and(|k| k.close_ts_ms != info.close_ts_ms) {
@@ -219,6 +235,7 @@ async fn discovery_loop(
                         } else if now > info.close_ts_ms + 30 * 60_000 {
                             warn!(ticker = %t, status = %info.status, "not settled 30 min after close; dropping");
                             settled.insert(t.clone());
+                            ignored.insert(t.clone());
                             known.remove(&t);
                         }
                     }

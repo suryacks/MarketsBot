@@ -141,45 +141,63 @@ pub async fn run(a: Args) -> Result<()> {
             day += 86_400;
         }
 
-        // 4. tick-level reference prices, downsampled to the last trade of each second
+        // 4. tick-level reference prices, downsampled to the last trade of each second.
+        //    Coinbase only pages backwards from the newest trade, so fetch the whole
+        //    missing span in ONE pass (oldest missing day → end) and split by UTC day.
         if a.ref_ticks {
+            let refs_dir = a.out.join("refs").join(&a.ref_product);
+            let day_path = |day: i64| {
+                let d = chrono::DateTime::from_timestamp(day, 0).unwrap().format("%Y-%m-%d").to_string();
+                refs_dir.join(format!("{d}.parquet"))
+            };
+            let mut missing: Vec<i64> = Vec::new();
             let mut day = start - start.rem_euclid(86_400);
             while day < end {
-                let day_str = chrono::DateTime::from_timestamp(day, 0).unwrap().format("%Y-%m-%d").to_string();
-                let path = a.out.join("refs").join(&a.ref_product).join(format!("{day_str}.parquet"));
                 let is_today = day + 86_400 > now;
-                if path.exists() && !a.force && !is_today {
-                    day += 86_400;
-                    continue;
+                if a.force || is_today || !day_path(day).exists() {
+                    missing.push(day);
                 }
-                let s_ms = day.max(start) * 1000;
-                let e_ms = (day + 86_400).min(end) * 1000;
-                info!(day = %day_str, "fetching coinbase ticks (this takes a few minutes per day)");
+                day += 86_400;
+            }
+            if let Some(&first) = missing.first() {
+                let s_ms = first.max(start) * 1000;
+                let e_ms = end * 1000;
+                info!(days = missing.len(), from = %chrono::DateTime::from_timestamp(first, 0).unwrap().date_naive(), "fetching coinbase ticks in one pass (~40 s per day)");
                 let ticks = cb
                     .trades_range(&a.ref_product, s_ms, e_ms, |n, oldest| {
                         info!(ticks = n, oldest = %chrono::DateTime::from_timestamp_millis(oldest).unwrap().to_rfc3339(), "…");
                     })
                     .await?;
-                // last price per second
-                let mut rows: Vec<RefRow> = Vec::new();
-                for t in &ticks {
-                    let sec = t.ts_ms.div_euclid(1000);
-                    match rows.last_mut() {
-                        Some(last) if last.ts_ms.div_euclid(1000) == sec => {
-                            last.ts_ms = t.ts_ms;
-                            last.px = t.px;
+                for &day in &missing {
+                    let lo = day * 1000;
+                    let hi = (day + 86_400) * 1000;
+                    let mut rows: Vec<RefRow> = Vec::new();
+                    let mut n_ticks = 0usize;
+                    for t in ticks.iter().filter(|t| t.ts_ms >= lo && t.ts_ms < hi) {
+                        n_ticks += 1;
+                        let sec = t.ts_ms.div_euclid(1000);
+                        match rows.last_mut() {
+                            Some(last) if last.ts_ms.div_euclid(1000) == sec => {
+                                last.ts_ms = t.ts_ms;
+                                last.px = t.px;
+                            }
+                            _ => rows.push(RefRow {
+                                source: mb_coinbase::SOURCE.into(),
+                                symbol: a.ref_product.clone(),
+                                ts_ms: t.ts_ms,
+                                px: t.px,
+                            }),
                         }
-                        _ => rows.push(RefRow {
-                            source: mb_coinbase::SOURCE.into(),
-                            symbol: a.ref_product.clone(),
-                            ts_ms: t.ts_ms,
-                            px: t.px,
-                        }),
                     }
+                    if rows.is_empty() {
+                        continue;
+                    }
+                    let p = day_path(day);
+                    write_parquet(&p, &rows)?;
+                    info!(path = %p.display(), ticks = n_ticks, seconds = rows.len(), "wrote refs");
                 }
-                write_parquet(&path, &rows)?;
-                info!(day = %day_str, ticks = ticks.len(), seconds = rows.len(), "wrote refs");
-                day += 86_400;
+            } else {
+                info!("tick refs already present for the whole range");
             }
         }
     }

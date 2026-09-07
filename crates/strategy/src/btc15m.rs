@@ -199,7 +199,7 @@ impl Btc15mStrategy {
                     .min(notional_room / a_px)
                     .min(ask_qty.to_f64())
                     .floor();
-                if qty >= 1.0 {
+                if qty >= self.cfg.min_order_qty.max(1.0) {
                     self.stats.signals += 1;
                     let req = OrderRequest::buy_yes(ticker, ask, Fp::from_int(qty as i64), Tif::Ioc).tagged("fv_buy_yes");
                     info!(ticker, fair = format!("{fair:.3}"), ask = %ask, edge = format!("{edge:.3}"), qty, "BUY YES");
@@ -230,7 +230,7 @@ impl Btc15mStrategy {
                     .min(notional_room / no_px)
                     .min(bid_qty.to_f64())
                     .floor();
-                if qty >= 1.0 {
+                if qty >= self.cfg.min_order_qty.max(1.0) {
                     self.stats.signals += 1;
                     let req = OrderRequest::sell_yes(ticker, bid, Fp::from_int(qty as i64), Tif::Ioc).tagged("fv_buy_no");
                     info!(ticker, fair = format!("{fair:.3}"), bid = %bid, edge = format!("{edge:.3}"), qty, "BUY NO");
