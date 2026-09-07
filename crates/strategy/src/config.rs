@@ -66,7 +66,7 @@ impl Default for Btc15mConfig {
             max_contracts_per_market: 200.0,
             max_notional_per_market: 100.0,
             max_order_qty: 50.0,
-            min_order_qty: 5.0,
+            min_order_qty: 1.0,
             no_trade_last_secs: 75,
             warmup_secs: 5,
             vol_lambda: 0.97,

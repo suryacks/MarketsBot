@@ -12,8 +12,9 @@ kelly_fraction = 0.25
 max_contracts_per_market = 200.0
 max_notional_per_market = 100.0
 max_order_qty = 50.0
-# Kalshi rounds each order's fee up to the cent: 1-lots pay ~4x the nominal rate.
-min_order_qty = 5.0
+# Kalshi rounds each order's fee up to the cent, so 1-lots pay ~4x the nominal rate — but the
+# A/B on 2026-09-05..07 showed small fills are still +EV at >= 3c edge (5 was strictly worse).
+min_order_qty = 1.0
 
 # Settlement is the mean of the last 60 s of the index; don't trade into it.
 no_trade_last_secs = 75
