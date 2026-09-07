@@ -55,7 +55,7 @@ impl Default for Btc15mConfig {
             warmup_secs: 5,
             vol_lambda: 0.97,
             vol_sample_secs: 60.0,
-            vol_floor_annual: 0.25,
+            vol_floor_annual: 0.08,
             vol_cap_annual: 2.0,
             requote_ms: 1_000,
             settle_avg_secs: 60.0,

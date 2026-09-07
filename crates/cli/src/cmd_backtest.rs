@@ -31,6 +31,9 @@ pub struct Args {
     /// tape | book
     #[arg(long, default_value = "tape")]
     pub mode: String,
+    /// candles | ticks | both — which reference-price data to replay
+    #[arg(long, default_value = "both")]
+    pub ref_source: String,
     #[arg(long, default_value_t = 1000.0)]
     pub bankroll: f64,
     /// Kalshi series fee multiplier (1.0 = standard 7% quadratic taker fee)
@@ -44,7 +47,7 @@ pub struct Args {
     pub report: PathBuf,
 }
 
-fn parse_day(s: &str, end: bool) -> Result<i64> {
+pub fn parse_day(s: &str, end: bool) -> Result<i64> {
     let d = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").with_context(|| format!("bad date {s}"))?;
     let t = if end { d.and_hms_opt(23, 59, 59).unwrap() } else { d.and_hms_opt(0, 0, 0).unwrap() };
     Ok(t.and_utc().timestamp_millis())
@@ -64,6 +67,7 @@ pub async fn run(a: Args) -> Result<()> {
         from_ms: a.from.as_deref().map(|s| parse_day(s, false)).transpose()?.unwrap_or(0),
         to_ms: a.to.as_deref().map(|s| parse_day(s, true)).transpose()?.unwrap_or(i64::MAX),
         ref_symbol: Some(cfg.ref_symbol.clone()),
+        ref_source: crate::cmd_calibrate::parse_ref_source(&a.ref_source),
     };
     let events = load_events(&a.data, &filter)?;
     if events.is_empty() {

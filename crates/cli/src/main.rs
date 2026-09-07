@@ -1,4 +1,5 @@
 mod cmd_backtest;
+mod cmd_calibrate;
 mod cmd_history;
 mod cmd_live;
 mod cmd_tools;
@@ -19,6 +20,8 @@ enum Cmd {
     FetchHistory(cmd_history::Args),
     /// Replay recorded data through a strategy with simulated fills and print a PnL report.
     Backtest(cmd_backtest::Args),
+    /// Model-vs-market calibration: Brier scores and calibration tables, no trading.
+    Calibrate(cmd_calibrate::Args),
     /// Record live market data (Kalshi books/trades, Coinbase ref prices, Polymarket books) to Parquet.
     Collect(cmd_live::CollectArgs),
     /// Paper-trade a strategy on live data with simulated fills (no orders sent).
@@ -45,6 +48,7 @@ async fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::FetchHistory(a) => cmd_history::run(a).await,
         Cmd::Backtest(a) => cmd_backtest::run(a).await,
+        Cmd::Calibrate(a) => cmd_calibrate::run(a).await,
         Cmd::Collect(a) => cmd_live::collect(a).await,
         Cmd::Paper(a) => cmd_live::paper(a).await,
         Cmd::Markets(a) => cmd_tools::markets(a).await,

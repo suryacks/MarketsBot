@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures_util::{stream, StreamExt};
 use mb_coinbase::CoinbaseRest;
-use mb_data::{write_parquet, CandleRow, MarketRow, TradeRow};
+use mb_data::{write_parquet, CandleRow, MarketRow, RefRow, TradeRow};
 use mb_kalshi::{KalshiClient, MarketsQuery};
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -27,6 +27,13 @@ pub struct Args {
     /// Re-download trade files that already exist
     #[arg(long)]
     pub force: bool,
+    /// Also pull tick-level Coinbase trades (1-second last price) into data/refs — slower (~10 req/s) but
+    /// removes the 60 s staleness of candles.
+    #[arg(long)]
+    pub ref_ticks: bool,
+    /// Skip Kalshi markets/trades (only refresh reference data)
+    #[arg(long)]
+    pub refs_only: bool,
 }
 
 pub async fn run(a: Args) -> Result<()> {
@@ -58,11 +65,14 @@ pub async fn run(a: Args) -> Result<()> {
     // 2. trade tape per market (idempotent: one file per ticker)
     let trades_dir = a.out.join("trades").join(&a.series);
     std::fs::create_dir_all(&trades_dir)?;
-    let todo: Vec<String> = rows
-        .iter()
-        .map(|r| r.ticker.clone())
-        .filter(|t| a.force || !trades_dir.join(format!("{t}.parquet")).exists())
-        .collect();
+    let todo: Vec<String> = if a.refs_only {
+        Vec::new()
+    } else {
+        rows.iter()
+            .map(|r| r.ticker.clone())
+            .filter(|t| a.force || !trades_dir.join(format!("{t}.parquet")).exists())
+            .collect()
+    };
     info!(total = rows.len(), to_fetch = todo.len(), "fetching trade tapes");
     let total_trades = std::sync::atomic::AtomicU64::new(0);
     let done = std::sync::atomic::AtomicU64::new(0);
@@ -129,6 +139,48 @@ pub async fn run(a: Args) -> Result<()> {
             write_parquet(&path, &rows)?;
             info!(day = %day_str, candles = rows.len(), "wrote candles");
             day += 86_400;
+        }
+
+        // 4. tick-level reference prices, downsampled to the last trade of each second
+        if a.ref_ticks {
+            let mut day = start - start.rem_euclid(86_400);
+            while day < end {
+                let day_str = chrono::DateTime::from_timestamp(day, 0).unwrap().format("%Y-%m-%d").to_string();
+                let path = a.out.join("refs").join(&a.ref_product).join(format!("{day_str}.parquet"));
+                let is_today = day + 86_400 > now;
+                if path.exists() && !a.force && !is_today {
+                    day += 86_400;
+                    continue;
+                }
+                let s_ms = day.max(start) * 1000;
+                let e_ms = (day + 86_400).min(end) * 1000;
+                info!(day = %day_str, "fetching coinbase ticks (this takes a few minutes per day)");
+                let ticks = cb
+                    .trades_range(&a.ref_product, s_ms, e_ms, |n, oldest| {
+                        info!(ticks = n, oldest = %chrono::DateTime::from_timestamp_millis(oldest).unwrap().to_rfc3339(), "…");
+                    })
+                    .await?;
+                // last price per second
+                let mut rows: Vec<RefRow> = Vec::new();
+                for t in &ticks {
+                    let sec = t.ts_ms.div_euclid(1000);
+                    match rows.last_mut() {
+                        Some(last) if last.ts_ms.div_euclid(1000) == sec => {
+                            last.ts_ms = t.ts_ms;
+                            last.px = t.px;
+                        }
+                        _ => rows.push(RefRow {
+                            source: mb_coinbase::SOURCE.into(),
+                            symbol: a.ref_product.clone(),
+                            ts_ms: t.ts_ms,
+                            px: t.px,
+                        }),
+                    }
+                }
+                write_parquet(&path, &rows)?;
+                info!(day = %day_str, ticks = ticks.len(), seconds = rows.len(), "wrote refs");
+                day += 86_400;
+            }
         }
     }
     info!("done. next: mbot backtest --series {} --data {}", a.series, a.out.display());

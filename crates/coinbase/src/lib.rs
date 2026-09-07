@@ -100,6 +100,85 @@ impl CoinbaseRest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tick {
+    pub trade_id: i64,
+    pub ts_ms: i64,
+    pub px: f64,
+    pub size: f64,
+}
+
+impl CoinbaseRest {
+    /// One page (≤1000) of trades older than `after_id` (newest first). `None` = latest.
+    pub async fn trades_page(&self, product: &str, after_id: Option<i64>) -> Result<Vec<Tick>> {
+        #[derive(serde::Deserialize)]
+        struct T {
+            trade_id: i64,
+            time: String,
+            price: String,
+            size: String,
+        }
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut req = self
+                .http
+                .get(format!("{REST_BASE}/products/{product}/trades"))
+                .query(&[("limit", "1000".to_string())]);
+            if let Some(a) = after_id {
+                req = req.query(&[("after", a.to_string())]);
+            }
+            let resp = req.send().await?;
+            if (resp.status().as_u16() == 429 || resp.status().is_server_error()) && attempt < 8 {
+                tokio::time::sleep(Duration::from_millis(400 * attempt)).await;
+                continue;
+            }
+            let raw: Vec<T> = resp.error_for_status()?.json().await.context("coinbase trades")?;
+            return Ok(raw
+                .into_iter()
+                .filter_map(|t| {
+                    Some(Tick {
+                        trade_id: t.trade_id,
+                        ts_ms: chrono::DateTime::parse_from_rfc3339(&t.time).ok()?.timestamp_millis(),
+                        px: t.price.parse().ok()?,
+                        size: t.size.parse().ok()?,
+                    })
+                })
+                .collect());
+        }
+    }
+
+    /// All trades with `start_ms <= ts < end_ms`, oldest first, by paging
+    /// backwards from the newest trade. ~10 requests/s (public rate limit).
+    /// `progress` is called with (ticks so far, oldest ts seen).
+    pub async fn trades_range(&self, product: &str, start_ms: i64, end_ms: i64, mut progress: impl FnMut(usize, i64)) -> Result<Vec<Tick>> {
+        let mut out: Vec<Tick> = Vec::new();
+        let mut after: Option<i64> = None;
+        let mut n = 0usize;
+        loop {
+            let page = self.trades_page(product, after).await?;
+            let Some(last) = page.last() else { break };
+            let oldest = last.ts_ms;
+            after = Some(last.trade_id);
+            for t in page {
+                if t.ts_ms >= start_ms && t.ts_ms < end_ms {
+                    out.push(t);
+                }
+            }
+            n += 1;
+            if n % 50 == 0 {
+                progress(out.len(), oldest);
+            }
+            if oldest < start_ms {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(105)).await;
+        }
+        out.sort_by_key(|t| t.trade_id);
+        Ok(out)
+    }
+}
+
 pub struct CoinbaseWs;
 
 impl CoinbaseWs {
