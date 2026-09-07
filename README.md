@@ -108,6 +108,16 @@ a function of the queue-position assumption the tape cannot resolve —
 measure where we actually sit in the queue; that is what `mbot paper --record` with API keys
 produces, and it is the next gate.
 
+**Live books (2026-09-07 onward)**: with API keys, `mbot paper --record data/live --maker --blend 0.5`
+streams full Kalshi books + Coinbase ticks, records them to Parquet, and paper-trades the maker
+strategy through the **queue-position fill model** (`crates/backtest/src/sim.rs`, book mode): a
+resting order records the contracts ahead of it at insertion, trades at the level eat the front of
+the queue, cancels reduce it pro-rata, and it fills only once at the front. The live KXBTC15M book
+carries ~1.5–2.9k contracts per level at a 1¢ spread, so joining the touch means queuing behind
+~2k contracts — the tape-mode "50 % fill at touch" assumption was far too generous. The status
+line reports `rested / avg_ahead / front / at_px / through` so this is measured, not assumed.
+Recorded books enable `mbot backtest --mode book --data data/live`.
+
 **Implied vol**: backing σ out of individual binary prints is ill-conditioned when the market lags
 spot (single prints imply >1000 % vol); it is kept as a rolling median for research
 (`vol_source = "implied" | "max" | "mean"`) but does not beat realized vol in calibration.
