@@ -123,11 +123,13 @@ pub async fn run(a: Args) -> Result<()> {
             report.summary()
         );
         let tag = format!(
-            "{}-{}-{}-edge{:.3}",
+            "{}-{}-{}-{}-edge{:.3}-lat{}",
             a.series,
             a.from.clone().unwrap_or_else(|| "all".into()),
             a.to.clone().unwrap_or_else(|| "all".into()),
-            edge
+            if cfg.maker { "maker" } else { "taker" },
+            edge,
+            a.latency_ms
         );
         report.write_csv(a.report.join(format!("{tag}-markets.csv")))?;
         mb_backtest::Report::write_fills_csv(a.report.join(format!("{tag}-fills.csv")), bt.fills())?;

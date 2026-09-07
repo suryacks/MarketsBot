@@ -76,6 +76,27 @@ Once a few days of that exist, `mbot backtest --mode book --data data/live` repl
 Treat tape-mode results as a go/no-go screen, book-mode results as the real estimate, and paper
 trading as the final gate before any capital.
 
+## Results so far (2026-09-05 → 09-07, 190 settled KXBTC15M markets, tick-level refs)
+
+Reproduce: `mbot fetch-history --days 3 --ref-ticks`, then `mbot calibrate --ref-source ticks`
+and `mbot backtest --ref-source ticks --edges 0.03,0.05 [--maker]`.
+
+* **Calibration** (`mbot calibrate`): with 1-minute candle refs the market's Brier beat the model's
+  in every horizon. With 1-second Coinbase ticks + learned basis (BRTI ≈ Coinbase + $6.2 ± 4.2)
+  the model is at parity overall (0.1672 vs 0.1673) and *better than the market with ≥ 5 min to
+  expiry* (300–600 s: 0.1557 vs 0.1580; 600–900 s: 0.2184 vs 0.2200), worse inside 5 min. Hence
+  `min_tau_secs = 300`.
+* **Taker backtest** (tape fill model, 250 ms latency, $1000 bankroll, 25% Kelly):
+  edge 3¢ → +$803 net after $549 fees; 5¢ → +$1048 after $410; 8¢ → +$864 after $199.
+  PnL is *insensitive to simulated latency* (still positive at 30 s), so this is a pricing edge —
+  the market over-reacts to spot moves relative to the remaining variance — not a speed race.
+* **Maker backtest** (post-only quotes at fair ∓ edge, zero maker fee): +$1.3k–2.7k depending on
+  the queue-position assumption (`--maker-touch-fill-prob` 0 → 0.5). Robust to 3 s latency,
+  collapses at 10 s (stale quotes get picked off).
+* **Caveats that matter**: 3 days is one vol regime (BTC realized ≈ 14.5% annualized); fills are
+  inferred from the trade tape, not real books; max drawdown ≈ 80–100% of bankroll at these
+  position caps, so sizing is far from final. The next gate is `mbot paper` on live books.
+
 ## Fees
 
 Kalshi: `fee = ceil_to_cent(0.07 × contracts × P × (1−P))` per fill for taker; series with
