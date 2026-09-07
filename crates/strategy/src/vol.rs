@@ -1,5 +1,11 @@
 //! Realized volatility from an irregularly-sampled price stream.
-//! Keeps an EWMA of per-second variance: v ← λ·v + (1−λ)·r²/Δt.
+//!
+//! Keeps an EWMA of per-second variance: v ← λ·v + (1−λ)·r²/Δt, but only
+//! takes a sample every `sample_ms` (default 60 s). Sampling at tick frequency
+//! is badly biased upward by bid/ask bounce and by uneven gaps (e.g. the
+//! 1-second gap between a candle close and the next candle open), which is
+//! exactly the kind of error that makes a fair-value model buy every cheap-looking
+//! contract and lose. The *latest* price is still tracked on every tick.
 
 pub const SECS_PER_YEAR: f64 = 365.0 * 86_400.0;
 
@@ -7,23 +13,22 @@ pub const SECS_PER_YEAR: f64 = 365.0 * 86_400.0;
 pub struct RealizedVol {
     lambda: f64,
     var_per_sec: f64,
-    last_px: Option<f64>,
-    last_ts_ms: i64,
-    /// Ignore samples closer together than this (microstructure noise).
-    min_dt_ms: i64,
+    sample_px: Option<f64>,
+    sample_ts_ms: i64,
+    sample_ms: i64,
     n: u64,
     floor_per_sec: f64,
     cap_per_sec: f64,
 }
 
 impl RealizedVol {
-    pub fn new(lambda: f64, floor_annual: f64, cap_annual: f64, min_dt_ms: i64) -> Self {
+    pub fn new(lambda: f64, floor_annual: f64, cap_annual: f64, sample_ms: i64) -> Self {
         Self {
             lambda,
             var_per_sec: 0.0,
-            last_px: None,
-            last_ts_ms: 0,
-            min_dt_ms,
+            sample_px: None,
+            sample_ts_ms: 0,
+            sample_ms: sample_ms.max(1),
             n: 0,
             floor_per_sec: floor_annual / SECS_PER_YEAR.sqrt(),
             cap_per_sec: cap_annual / SECS_PER_YEAR.sqrt(),
@@ -34,23 +39,29 @@ impl RealizedVol {
         if !(px > 0.0) {
             return;
         }
-        if let Some(prev) = self.last_px {
-            let dt_ms = ts_ms - self.last_ts_ms;
-            if dt_ms < self.min_dt_ms {
-                return;
+        match self.sample_px {
+            None => {
+                self.sample_px = Some(px);
+                self.sample_ts_ms = ts_ms;
             }
-            let dt = dt_ms as f64 / 1000.0;
-            let r = (px / prev).ln();
-            let sample = r * r / dt;
-            self.var_per_sec = if self.n == 0 {
-                sample
-            } else {
-                self.lambda * self.var_per_sec + (1.0 - self.lambda) * sample
-            };
-            self.n += 1;
+            Some(prev) => {
+                let dt_ms = ts_ms - self.sample_ts_ms;
+                if dt_ms < self.sample_ms {
+                    return;
+                }
+                let dt = dt_ms as f64 / 1000.0;
+                let r = (px / prev).ln();
+                let sample = r * r / dt;
+                self.var_per_sec = if self.n == 0 {
+                    sample
+                } else {
+                    self.lambda * self.var_per_sec + (1.0 - self.lambda) * sample
+                };
+                self.n += 1;
+                self.sample_px = Some(px);
+                self.sample_ts_ms = ts_ms;
+            }
         }
-        self.last_px = Some(px);
-        self.last_ts_ms = ts_ms;
     }
 
     /// Per-second sigma, clamped to [floor, cap].
@@ -66,10 +77,6 @@ impl RealizedVol {
     pub fn samples(&self) -> u64 {
         self.n
     }
-
-    pub fn last(&self) -> Option<(i64, f64)> {
-        self.last_px.map(|p| (self.last_ts_ms, p))
-    }
 }
 
 #[cfg(test)]
@@ -78,7 +85,7 @@ mod tests {
 
     #[test]
     fn constant_price_hits_floor() {
-        let mut v = RealizedVol::new(0.97, 0.25, 2.0, 100);
+        let mut v = RealizedVol::new(0.97, 0.25, 2.0, 1000);
         for i in 0..100 {
             v.update(i * 1000, 100.0);
         }
@@ -88,7 +95,7 @@ mod tests {
     #[test]
     fn recovers_known_vol_roughly() {
         // deterministic +/- alternating returns of size r each second => var = r^2
-        let mut v = RealizedVol::new(0.99, 0.01, 10.0, 100);
+        let mut v = RealizedVol::new(0.99, 0.01, 10.0, 1000);
         let r: f64 = 1e-4; // per-second
         let mut px: f64 = 100.0;
         for i in 0..5000 {
@@ -96,5 +103,18 @@ mod tests {
             v.update(i * 1000, px);
         }
         assert!((v.sigma_per_sec() - r).abs() / r < 0.05);
+    }
+
+    #[test]
+    fn ignores_sub_interval_ticks() {
+        let mut v = RealizedVol::new(0.99, 0.0, 10.0, 60_000);
+        // a huge bounce inside the interval must not register
+        v.update(0, 100.0);
+        v.update(500, 101.0);
+        v.update(1_000, 100.0);
+        assert_eq!(v.samples(), 0);
+        v.update(60_000, 100.0);
+        assert_eq!(v.samples(), 1);
+        assert!(v.sigma_per_sec() < 1e-9);
     }
 }

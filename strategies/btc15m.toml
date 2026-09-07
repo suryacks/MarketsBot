@@ -20,6 +20,7 @@ settle_avg_secs = 60.0
 
 # Realized-vol estimator (EWMA of per-second variance) and sanity clamps (annualized).
 vol_lambda = 0.97
+vol_sample_secs = 60.0
 vol_floor_annual = 0.25
 vol_cap_annual = 2.0
 

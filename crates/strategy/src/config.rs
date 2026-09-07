@@ -26,6 +26,8 @@ pub struct Btc15mConfig {
     pub warmup_secs: i64,
     /// EWMA decay per observation for realized variance.
     pub vol_lambda: f64,
+    /// Take one variance sample every N seconds (tick-frequency sampling is biased upward).
+    pub vol_sample_secs: f64,
     /// Floor / cap on annualized volatility used for pricing.
     pub vol_floor_annual: f64,
     pub vol_cap_annual: f64,
@@ -52,6 +54,7 @@ impl Default for Btc15mConfig {
             no_trade_last_secs: 75,
             warmup_secs: 5,
             vol_lambda: 0.97,
+            vol_sample_secs: 60.0,
             vol_floor_annual: 0.25,
             vol_cap_annual: 2.0,
             requote_ms: 1_000,

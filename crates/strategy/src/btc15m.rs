@@ -41,7 +41,12 @@ pub struct Stats {
 
 impl Btc15mStrategy {
     pub fn new(cfg: Btc15mConfig) -> Self {
-        let vol = RealizedVol::new(cfg.vol_lambda, cfg.vol_floor_annual, cfg.vol_cap_annual, 250);
+        let vol = RealizedVol::new(
+            cfg.vol_lambda,
+            cfg.vol_floor_annual,
+            cfg.vol_cap_annual,
+            (cfg.vol_sample_secs * 1000.0) as i64,
+        );
         Self {
             cfg,
             vol,
@@ -133,8 +138,12 @@ impl Btc15mStrategy {
             let notional_room = self.cfg.max_notional_per_market - a.notional;
             if edge > self.cfg.min_edge && room > 0.0 && notional_room > 0.0 {
                 let f = kelly_fraction_buy(fair, a_px + fee) * self.cfg.kelly_fraction;
-                let mut qty = (f * bankroll / a_px).floor();
-                qty = qty.min(room).min(self.cfg.max_order_qty).min(notional_room / a_px).min(ask_qty.to_f64());
+                let qty = (f * bankroll / a_px)
+                    .min(room)
+                    .min(self.cfg.max_order_qty)
+                    .min(notional_room / a_px)
+                    .min(ask_qty.to_f64())
+                    .floor();
                 if qty >= 1.0 {
                     self.stats.signals += 1;
                     let req = OrderRequest::buy_yes(ticker, ask, Fp::from_int(qty as i64), Tif::Ioc).tagged("fv_buy_yes");
@@ -161,8 +170,12 @@ impl Btc15mStrategy {
             let notional_room = self.cfg.max_notional_per_market - a.notional;
             if edge > self.cfg.min_edge && room > 0.0 && notional_room > 0.0 {
                 let f = kelly_fraction_buy(1.0 - fair, no_px + fee) * self.cfg.kelly_fraction;
-                let mut qty = (f * bankroll / no_px).floor();
-                qty = qty.min(room).min(self.cfg.max_order_qty).min(notional_room / no_px).min(bid_qty.to_f64());
+                let qty = (f * bankroll / no_px)
+                    .min(room)
+                    .min(self.cfg.max_order_qty)
+                    .min(notional_room / no_px)
+                    .min(bid_qty.to_f64())
+                    .floor();
                 if qty >= 1.0 {
                     self.stats.signals += 1;
                     let req = OrderRequest::sell_yes(ticker, bid, Fp::from_int(qty as i64), Tif::Ioc).tagged("fv_buy_no");
