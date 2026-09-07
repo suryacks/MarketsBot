@@ -194,9 +194,10 @@ async fn discovery_loop(
                             if ignored.contains(&info.ticker) {
                                 continue;
                             }
-                            // stale/zombie listings: no strike or closed long ago
-                            if info.floor_strike.is_none() || info.close_ts_ms < chrono::Utc::now().timestamp_millis() - 60 * 60_000 {
-                                warn!(ticker = %info.ticker, status = %info.status, "ignoring market without strike / already closed");
+                            // stale/zombie listings: closed long ago (strategies decide for themselves
+                            // whether a market without a numeric strike is tradeable)
+                            if info.close_ts_ms < chrono::Utc::now().timestamp_millis() - 60 * 60_000 {
+                                warn!(ticker = %info.ticker, status = %info.status, "ignoring market closed > 1h ago");
                                 ignored.insert(info.ticker.clone());
                                 continue;
                             }
