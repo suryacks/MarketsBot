@@ -247,6 +247,32 @@ pub fn parse_message(v: &Value) -> Vec<MarketEvent> {
             yes_ask: m.get("yes_ask_dollars").and_then(fp),
             last: m.get("price_dollars").and_then(fp),
         }],
+        "fill" => {
+            let (Some(px), Some(qty)) = (m.get("yes_price_dollars").and_then(fp), m.get("count_fp").and_then(fp)) else {
+                return vec![];
+            };
+            let action = m.get("action").and_then(Value::as_str).unwrap_or("buy");
+            let side = m
+                .get("purchased_side")
+                .or_else(|| m.get("outcome_side"))
+                .or_else(|| m.get("side"))
+                .and_then(Value::as_str)
+                .unwrap_or("yes");
+            // buying YES or selling NO both increase YES exposure
+            let buy_yes = matches!((action, side), ("buy", "yes") | ("sell", "no"));
+            vec![MarketEvent::UserFill(mb_core::UserFill {
+                venue: Venue::Kalshi,
+                ticker,
+                ts_ms: ts_ms(m),
+                trade_id: m.get("trade_id").and_then(Value::as_str).unwrap_or("").to_string(),
+                order_id: m.get("order_id").and_then(Value::as_str).unwrap_or("").to_string(),
+                buy_yes,
+                yes_px: px,
+                qty,
+                fee: m.get("fee_cost").and_then(fp).unwrap_or(Fp::ZERO),
+                is_taker: m.get("is_taker").and_then(Value::as_bool).unwrap_or(false),
+            })]
+        }
         "trade" => {
             let (Some(px), Some(qty)) = (m.get("yes_price_dollars").and_then(fp), m.get("count_fp").and_then(fp)) else {
                 return vec![];

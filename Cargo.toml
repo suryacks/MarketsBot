@@ -16,6 +16,7 @@ mb-coinbase = { path = "crates/coinbase" }
 mb-data = { path = "crates/data" }
 mb-strategy = { path = "crates/strategy" }
 mb-backtest = { path = "crates/backtest" }
+mb-live = { path = "crates/live" }
 
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.13", features = ["json", "query", "gzip"] }

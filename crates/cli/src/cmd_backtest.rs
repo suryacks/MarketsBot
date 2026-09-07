@@ -155,13 +155,15 @@ pub async fn run(a: Args) -> Result<()> {
             report.summary()
         );
         let tag = format!(
-            "{}-{}-{}-{}-edge{:.3}-lat{}",
+            "{}-{}-{}-{}-edge{:.3}-lat{}-b{}-{}",
             a.series,
             a.from.clone().unwrap_or_else(|| "all".into()),
             a.to.clone().unwrap_or_else(|| "all".into()),
-            if cfg.maker { "maker" } else { "taker" },
+            if cfg.maker { format!("maker-q{}", a.maker_touch_fill_prob) } else { "taker".into() },
             edge,
-            a.latency_ms
+            a.latency_ms,
+            cfg.market_blend,
+            cfg.vol_source
         );
         report.write_csv(a.report.join(format!("{tag}-markets.csv")))?;
         report.write_json(

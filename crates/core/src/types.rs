@@ -113,11 +113,29 @@ pub struct RefPrice {
     pub px: f64,
 }
 
+/// One of *our* orders got (partially) filled on a live venue.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UserFill {
+    pub venue: Venue,
+    pub ticker: String,
+    pub ts_ms: i64,
+    pub trade_id: String,
+    /// Venue-native order id.
+    pub order_id: String,
+    /// True = we bought YES / sold NO (net YES exposure up).
+    pub buy_yes: bool,
+    pub yes_px: Fp,
+    pub qty: Fp,
+    pub fee: Fp,
+    pub is_taker: bool,
+}
+
 /// Every input a strategy can observe, from any venue, in one enum so that the
 /// backtester and the live engine can drive strategies identically.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MarketEvent {
     Market(MarketInfo),
+    UserFill(UserFill),
     BookSnapshot {
         venue: Venue,
         ticker: String,
@@ -174,6 +192,7 @@ impl MarketEvent {
             | MarketEvent::Settlement { ts_ms, .. } => *ts_ms,
             MarketEvent::Trade(t) => t.ts_ms,
             MarketEvent::Ref(r) => r.ts_ms,
+            MarketEvent::UserFill(f) => f.ts_ms,
         }
     }
 
@@ -186,6 +205,7 @@ impl MarketEvent {
             | MarketEvent::Ticker { ticker, .. }
             | MarketEvent::Settlement { ticker, .. } => Some(ticker),
             MarketEvent::Trade(t) => Some(&t.ticker),
+            MarketEvent::UserFill(f) => Some(&f.ticker),
             MarketEvent::Ref(_) => None,
         }
     }
@@ -200,6 +220,7 @@ impl MarketEvent {
             MarketEvent::BookDelta { .. } | MarketEvent::BookLevel { .. } => 3,
             MarketEvent::Ticker { .. } => 4,
             MarketEvent::Trade(_) => 5,
+            MarketEvent::UserFill(_) => 6,
             MarketEvent::Settlement { .. } => 9,
         }
     }

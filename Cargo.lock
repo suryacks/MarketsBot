@@ -1645,6 +1645,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mb-live"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "mb-core",
+ "mb-kalshi",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mb-polymarket"
 version = "0.1.0"
 dependencies = [
@@ -1688,6 +1701,7 @@ dependencies = [
  "mb-core",
  "mb-data",
  "mb-kalshi",
+ "mb-live",
  "mb-polymarket",
  "mb-strategy",
  "serde",

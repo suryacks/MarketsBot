@@ -13,7 +13,7 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use mb_backtest::{Backtester, FillMode, SimConfig, SimExchange};
 use mb_coinbase::CoinbaseWs;
-use mb_core::{FeeModel, Fp, MarketEvent, Venue};
+use mb_core::{Context as _, FeeModel, Fp, MarketEvent, Venue};
 use mb_data::Recorder;
 use mb_kalshi::{Channel, KalshiClient, KalshiWs, MarketsQuery};
 use mb_polymarket::PolymarketWs;
@@ -91,6 +91,11 @@ pub struct Feeds {
 }
 
 pub async fn start_feeds(a: &FeedArgs) -> Result<Feeds> {
+    start_feeds_with(a, false).await
+}
+
+/// `with_fills`: also subscribe to the authenticated `fill` channel (live trading).
+pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
     let (tx, rx) = mpsc::channel::<MarketEvent>(65_536);
     // Market data should be *production* prices even when orders go to demo. Keys are
     // environment-specific, so with demo keys the WebSocket necessarily shows demo books.
@@ -120,8 +125,12 @@ pub async fn start_feeds(a: &FeedArgs) -> Result<Feeds> {
     if authenticated {
         let ws = KalshiWs::from_env()?;
         let txc = tx.clone();
+        let mut channels = vec![Channel::OrderbookDelta, Channel::Trade, Channel::Ticker];
+        if with_fills {
+            channels.push(Channel::Fill);
+        }
         tokio::spawn(async move {
-            if let Err(e) = ws.run_dynamic(&[Channel::OrderbookDelta, Channel::Trade, Channel::Ticker], wrx, txc).await {
+            if let Err(e) = ws.run_dynamic(&channels, wrx, txc).await {
                 warn!(error = %e, "kalshi ws task ended");
             }
         });
@@ -326,6 +335,101 @@ async fn discovery_loop(
 
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct LiveArgs {
+    #[command(flatten)]
+    pub paper: PaperArgs,
+    /// Hard cap on worst-case dollars at risk (positions + resting orders)
+    #[arg(long, default_value_t = 100.0)]
+    pub max_notional: f64,
+    #[arg(long, default_value_t = 5.0)]
+    pub max_order_qty: f64,
+    #[arg(long, default_value_t = 20)]
+    pub max_open_orders: usize,
+    /// Kill switch: halt and cancel everything once equity drops this much below start
+    #[arg(long, default_value_t = 50.0)]
+    pub max_loss: f64,
+    /// Log orders instead of sending them
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Required to send real orders against the production exchange
+    #[arg(long)]
+    pub i_understand_this_uses_real_money: bool,
+}
+
+pub async fn live(a: LiveArgs) -> Result<()> {
+    let (rest, _) = mb_kalshi::env_urls();
+    let is_prod = rest.contains("external-api.kalshi.com");
+    if is_prod && !a.dry_run && !a.i_understand_this_uses_real_money {
+        anyhow::bail!("KALSHI_ENV=prod: pass --i-understand-this-uses-real-money (or --dry-run, or set KALSHI_ENV=demo)");
+    }
+    let client = KalshiClient::from_env()?;
+    if !client.is_authenticated() {
+        anyhow::bail!("live trading needs KALSHI_API_KEY_ID / KALSHI_PRIVATE_KEY_PATH");
+    }
+    let (mut strat, series_label) = build_strategy(&a.paper)?;
+    let run_id = a
+        .paper
+        .run_id
+        .clone()
+        .unwrap_or_else(|| format!("LIVE-{}-{}", strat.name(), chrono::Utc::now().format("%Y%m%d-%H%M")));
+    let started_ms = chrono::Utc::now().timestamp_millis();
+    let state_path = a.paper.state_dir.join(format!("{run_id}.json"));
+    let mut feeds = start_feeds_with(&a.paper.feed, true).await?;
+    let cfg = mb_live::LiveConfig {
+        max_notional: a.max_notional,
+        max_order_qty: a.max_order_qty,
+        max_open_orders: a.max_open_orders,
+        max_loss: a.max_loss,
+        dry_run: a.dry_run,
+    };
+    let mut ex = mb_live::KalshiExecutor::new(client, cfg).await?;
+    for (s, fm) in &feeds.fee_models {
+        ex.set_fee_model(s, fm.clone());
+    }
+    let mut rec = a.paper.record.as_ref().map(|p| Recorder::new(p, 60, 200_000));
+    warn!(run_id, series = %series_label, env = if is_prod { "PROD" } else { "demo" }, dry_run = a.dry_run,
+          max_notional = a.max_notional, max_loss = a.max_loss, "LIVE TRADING — Ctrl-C to stop (resting orders are cancelled on exit)");
+
+    let mut state_tick = tokio::time::interval(Duration::from_secs(1));
+    let mut sync_tick = tokio::time::interval(Duration::from_secs(60));
+    sync_tick.tick().await;
+    loop {
+        tokio::select! {
+            _ = state_tick.tick() => {
+                let st = ex.state(&run_id, started_ms, strat.name(), strat.snapshot());
+                if let Err(e) = Backtester::write_state(&state_path, &st) { warn!(error = %e, "state write failed"); }
+            }
+            _ = sync_tick.tick() => {
+                if let Err(e) = ex.sync_account().await { warn!(error = %e, "account resync failed"); }
+            }
+            ev = feeds.rx.recv() => {
+                let Some(ev) = ev else { break };
+                if let Some(r) = rec.as_mut() { r.record(&ev)?; }
+                ex.on_event(&ev);
+                strat.on_event(&ev, &mut ex);
+                for f in ex.drain_fills() {
+                    strat.on_fill(&f, &mut ex);
+                }
+            }
+            _ = tokio::signal::ctrl_c() => { info!("stopping: cancelling resting orders"); break; }
+        }
+    }
+    let ids: Vec<mb_core::OrderId> = ex.open_orders_all();
+    for id in ids {
+        ex.cancel(id);
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await; // let the worker flush cancels
+    if let Some(r) = rec.as_mut() {
+        r.flush()?;
+    }
+    let mut st = ex.state(&run_id, started_ms, strat.name(), strat.snapshot());
+    st["stopped_ms"] = serde_json::json!(chrono::Utc::now().timestamp_millis());
+    let _ = Backtester::write_state(&state_path, &st);
+    println!("{}", serde_json::to_string_pretty(&st["risk"])?);
+    Ok(())
 }
 
 pub async fn collect(a: CollectArgs) -> Result<()> {

@@ -239,7 +239,7 @@ impl Strategy for SpreadMaker {
             MarketEvent::Settlement { ticker, .. } => {
                 self.mkts.remove(ticker);
             }
-            MarketEvent::Ref(_) => {}
+            MarketEvent::Ref(_) | MarketEvent::UserFill(_) => {}
         }
     }
 

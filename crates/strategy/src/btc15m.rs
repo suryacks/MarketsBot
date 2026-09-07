@@ -386,6 +386,7 @@ impl Strategy for Btc15mStrategy {
             MarketEvent::Settlement { ticker, .. } => {
                 self.active.remove(ticker);
             }
+            MarketEvent::UserFill(_) => {}
         }
     }
 

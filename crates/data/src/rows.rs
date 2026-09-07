@@ -262,7 +262,7 @@ pub fn event_to_rows(ev: &MarketEvent) -> RowBatch {
             qty: qty.0,
             snapshot_start: false,
         }]),
-        MarketEvent::Settlement { .. } => RowBatch::Nothing,
+        MarketEvent::Settlement { .. } | MarketEvent::UserFill(_) => RowBatch::Nothing,
     }
 }
 

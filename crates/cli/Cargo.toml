@@ -17,6 +17,7 @@ mb-coinbase.workspace = true
 mb-data.workspace = true
 mb-strategy.workspace = true
 mb-backtest.workspace = true
+mb-live.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

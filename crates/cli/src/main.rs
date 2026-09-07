@@ -27,6 +27,8 @@ enum Cmd {
     Collect(cmd_live::CollectArgs),
     /// Paper-trade a strategy on live data with simulated fills (no orders sent).
     Paper(cmd_live::PaperArgs),
+    /// Trade for real on Kalshi with hard risk caps (demo env by default; prod needs an explicit flag).
+    Live(cmd_live::LiveArgs),
     /// List open markets in a Kalshi series.
     Markets(cmd_tools::MarketsArgs),
     /// Show the live orderbook for a Kalshi ticker (needs API keys) or Polymarket token id.
@@ -54,6 +56,7 @@ async fn main() -> Result<()> {
         Cmd::Calibrate(a) => cmd_calibrate::run(a).await,
         Cmd::Collect(a) => cmd_live::collect(a).await,
         Cmd::Paper(a) => cmd_live::paper(a).await,
+        Cmd::Live(a) => cmd_live::live(a).await,
         Cmd::Markets(a) => cmd_tools::markets(a).await,
         Cmd::Book(a) => cmd_tools::book(a).await,
         Cmd::ArbScan(a) => cmd_tools::arb_scan(a).await,
