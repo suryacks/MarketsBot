@@ -64,6 +64,15 @@ pub struct PaperArgs {
     /// Also record everything seen to this directory
     #[arg(long)]
     pub record: Option<PathBuf>,
+    /// Override config: maker mode (rest post-only quotes)
+    #[arg(long)]
+    pub maker: bool,
+    /// Override config: weight on market mid in the blended fair value
+    #[arg(long)]
+    pub blend: Option<f64>,
+    /// Override config: realized | implied | max | mean
+    #[arg(long)]
+    pub vol_source: Option<String>,
 }
 
 pub struct Feeds {
@@ -338,6 +347,15 @@ pub async fn paper(a: PaperArgs) -> Result<()> {
     if let Some(s) = a.feed.series.first() {
         cfg.series = s.clone();
     }
+    if a.maker {
+        cfg.maker = true;
+    }
+    if let Some(b) = a.blend {
+        cfg.market_blend = b;
+    }
+    if let Some(v) = &a.vol_source {
+        cfg.vol_source = v.clone();
+    }
     let mut feeds = start_feeds(&a.feed).await?;
     let mut sim = SimExchange::new(SimConfig {
         mode: FillMode::Book,
@@ -377,7 +395,10 @@ pub async fn paper(a: PaperArgs) -> Result<()> {
                     let cash = bt.sim.total_cash();
                     let open: Vec<String> = bt.sim.positions().values().filter(|p| !p.yes_qty.is_zero()).map(|p| format!("{}:{}", p.ticker, p.yes_qty.fmt_dec(0))).collect();
                     let settled_pnl: f64 = bt.sim.settled.iter().map(|(_, _, _, pnl)| pnl.to_f64()).sum();
-                    info!(cash = %cash, fills = n_fills, settled_pnl = format!("{settled_pnl:.2}"), ?open, "status");
+                    let qs = &bt.sim.queue_stats;
+                    info!(cash = %cash, fills = n_fills, settled_pnl = format!("{settled_pnl:.2}"), ?open,
+                          rested = qs.orders_rested, avg_ahead = format!("{:.0}", if qs.orders_rested > 0 { qs.ahead_at_insert / qs.orders_rested as f64 } else { 0.0 }),
+                          front = qs.reached_front, at_px = qs.fills_at_price, through = qs.fills_through, "status");
                     last_log = std::time::Instant::now();
                 }
             }

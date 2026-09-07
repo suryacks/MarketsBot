@@ -132,6 +132,17 @@ pub async fn run(a: Args) -> Result<()> {
         let mut bt = Backtester::new(sim, Box::new(strat));
         bt.run(&events);
         let report = bt.report(Fp::from_f64(a.bankroll));
+        if cfg.maker {
+            let qs = &bt.sim.queue_stats;
+            println!(
+                "queue: rested {} avg_ahead {:.0} reached_front {} fills_at_price {} fills_through {}",
+                qs.orders_rested,
+                if qs.orders_rested > 0 { qs.ahead_at_insert / qs.orders_rested as f64 } else { 0.0 },
+                qs.reached_front,
+                qs.fills_at_price,
+                qs.fills_through
+            );
+        }
         println!(
             "\n=== min_edge = {edge:.3} | latency {} ms | {} fills | {} | min_tau {}s | vol {} | blend {} | max_entries {} ===\n{}",
             a.latency_ms,

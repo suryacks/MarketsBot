@@ -78,6 +78,10 @@ struct SynthBook {
 struct Resting {
     req: OrderRequest,
     remaining: Fp,
+    /// Book mode: contracts queued ahead of us at our price. Set from the book
+    /// when the order becomes active; reduced by trades at our level (front of
+    /// queue first) and pro-rata by cancels. We fill only once it reaches zero.
+    ahead: Fp,
 }
 
 pub struct SimExchange {
@@ -93,6 +97,23 @@ pub struct SimExchange {
     fills: Vec<Fill>,
     next_id: u64,
     pub settled: Vec<(String, Outcome, Position, Fp)>,
+    /// (ts_ms, ticker, yes_px, qty) of recent trades, to tell trade-driven level
+    /// reductions from cancels in book mode.
+    recent_trades: std::collections::VecDeque<(i64, String, Fp, Fp)>,
+    /// Negative level deltas already applied to queue positions, so the matching
+    /// trade message (which may arrive after the delta) doesn't decrement twice.
+    recent_deltas: std::collections::VecDeque<(i64, String, Fp, Fp)>,
+    pub queue_stats: QueueStats,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct QueueStats {
+    pub orders_rested: u64,
+    /// Sum of contracts ahead at insertion (for the average).
+    pub ahead_at_insert: f64,
+    pub reached_front: u64,
+    pub fills_at_price: u64,
+    pub fills_through: u64,
 }
 
 impl SimExchange {
@@ -110,6 +131,57 @@ impl SimExchange {
             fills: Vec::new(),
             next_id: 1,
             settled: Vec::new(),
+            recent_trades: std::collections::VecDeque::new(),
+            recent_deltas: std::collections::VecDeque::new(),
+            queue_stats: QueueStats::default(),
+        }
+    }
+
+    fn remember(q: &mut std::collections::VecDeque<(i64, String, Fp, Fp)>, item: (i64, String, Fp, Fp)) {
+        q.push_back(item);
+        while q.len() > 512 {
+            q.pop_front();
+        }
+    }
+
+    fn recently(q: &std::collections::VecDeque<(i64, String, Fp, Fp)>, now: i64, ticker: &str, px: Fp, qty: Fp) -> bool {
+        q.iter().any(|(ts, t, p, q)| now - *ts <= 2_000 && t == ticker && *p == px && *q == qty)
+    }
+
+    fn level_qty(&self, ticker: &str, action: Action, px: Fp) -> Fp {
+        let Some(b) = self.books.get(ticker) else { return Fp::ZERO };
+        match action {
+            Action::Buy => b.bids.get(&px).copied().unwrap_or(Fp::ZERO),
+            Action::Sell => b.asks.get(&px).copied().unwrap_or(Fp::ZERO),
+        }
+    }
+
+    /// Book mode: a level we rest on shrank by `removed` (before the book was
+    /// updated, the level held `before`). If a trade of that size just printed
+    /// there, the Trade path has already moved the queue (trades eat the front);
+    /// otherwise treat it as cancels spread uniformly through the queue.
+    fn on_level_reduced(&mut self, ticker: &str, side: BookSide, px: Fp, removed: Fp, before: Fp) {
+        if removed.0 <= 0 || before.0 <= 0 {
+            return;
+        }
+        let now = self.now_ms;
+        if Self::recently(&self.recent_trades, now, ticker, px, removed) {
+            return;
+        }
+        Self::remember(&mut self.recent_deltas, (now, ticker.to_string(), px, removed));
+        let action = match side {
+            BookSide::Bid => Action::Buy,
+            BookSide::Ask => Action::Sell,
+        };
+        for r in self.resting.values_mut() {
+            if r.req.ticker != ticker || r.req.action != action || r.req.yes_px != px || r.ahead.0 <= 0 {
+                continue;
+            }
+            let dec = Fp((removed.0 as i128 * r.ahead.0 as i128 / before.0 as i128) as i64);
+            r.ahead = (r.ahead - dec).max(Fp::ZERO);
+            if r.ahead.is_zero() {
+                self.queue_stats.reached_front += 1;
+            }
         }
     }
 
@@ -166,14 +238,39 @@ impl SimExchange {
                 ticker, bids, asks, ts_ms, seq, ..
             } => {
                 self.books.entry(ticker.clone()).or_default().replace(bids, asks, *ts_ms, *seq);
+                // resync: nobody can be ahead of us beyond what the level now holds
+                let levels: Vec<(OrderId, Fp)> = self
+                    .resting
+                    .iter()
+                    .filter(|(_, r)| &r.req.ticker == ticker)
+                    .map(|(id, r)| (*id, self.level_qty(ticker, r.req.action, r.req.yes_px)))
+                    .collect();
+                for (id, lvl) in levels {
+                    if let Some(r) = self.resting.get_mut(&id) {
+                        r.ahead = r.ahead.min(lvl);
+                    }
+                }
             }
             MarketEvent::BookDelta { ticker, side, px, delta, .. } => {
+                if delta.0 < 0 && self.cfg.mode == FillMode::Book {
+                    let before = self.level_qty(ticker, if *side == BookSide::Bid { Action::Buy } else { Action::Sell }, *px);
+                    self.on_level_reduced(ticker, *side, *px, -*delta, before);
+                }
                 self.books.entry(ticker.clone()).or_default().apply_delta(*side, *px, *delta);
             }
             MarketEvent::BookLevel { ticker, side, px, qty, .. } => {
+                if self.cfg.mode == FillMode::Book {
+                    let before = self.level_qty(ticker, if *side == BookSide::Bid { Action::Buy } else { Action::Sell }, *px);
+                    if *qty < before {
+                        self.on_level_reduced(ticker, *side, *px, before - *qty, before);
+                    }
+                }
                 self.books.entry(ticker.clone()).or_default().set_level(*side, *px, *qty);
             }
             MarketEvent::Trade(t) => {
+                if self.cfg.mode == FillMode::Book {
+                    Self::remember(&mut self.recent_trades, (self.now_ms, t.ticker.clone(), t.yes_px, t.qty));
+                }
                 if self.cfg.mode == FillMode::Tape {
                     let sb = self.synth.entry(t.ticker.clone()).or_default();
                     let touch = Touch {
@@ -267,7 +364,8 @@ impl SimExchange {
         }
         let Some(book) = self.books.get(&req.ticker) else {
             if req.tif == Tif::Gtc {
-                self.resting.insert(id, Resting { req: req.clone(), remaining: req.qty });
+                self.queue_stats.orders_rested += 1;
+                self.resting.insert(id, Resting { req: req.clone(), remaining: req.qty, ahead: Fp::ZERO });
             }
             return;
         };
@@ -301,7 +399,14 @@ impl SimExchange {
             }
         }
         if remaining.is_positive() && req.tif == Tif::Gtc {
-            self.resting.insert(id, Resting { req, remaining });
+            // everyone already at our price is ahead of us
+            let ahead = if self.cfg.mode == FillMode::Book { self.level_qty(&req.ticker, req.action, req.yes_px) } else { Fp::ZERO };
+            self.queue_stats.orders_rested += 1;
+            self.queue_stats.ahead_at_insert += ahead.to_f64();
+            if ahead.is_zero() {
+                self.queue_stats.reached_front += 1;
+            }
+            self.resting.insert(id, Resting { req, remaining, ahead });
         }
     }
 
@@ -317,11 +422,38 @@ impl SimExchange {
                 (Action::Sell, Outcome::Yes) => (t.yes_px > r.req.yes_px, t.yes_px == r.req.yes_px),
                 _ => (false, false),
             };
-            let hit = through || (at && hash01(&format!("{}{}", t.trade_id, id.0)) < self.cfg.maker_touch_fill_prob);
-            if !hit {
+            // How much of this print reaches us.
+            let reach = if through {
+                t.qty
+            } else if !at {
+                Fp::ZERO
+            } else if self.cfg.mode == FillMode::Book {
+                // the trade eats the queue ahead of us first — unless its level delta
+                // already arrived and was applied (pro-rata) as if it were a cancel
+                let ahead = r.ahead;
+                let already = Self::recently(&self.recent_deltas, self.now_ms, &t.ticker, t.yes_px, t.qty);
+                let reach = (t.qty - ahead).max(Fp::ZERO);
+                if !already && let Some(rr) = self.resting.get_mut(&id) {
+                    rr.ahead = (ahead - t.qty).max(Fp::ZERO);
+                    if ahead.is_positive() && rr.ahead.is_zero() {
+                        self.queue_stats.reached_front += 1;
+                    }
+                }
+                reach
+            } else if hash01(&format!("{}{}", t.trade_id, id.0)) < self.cfg.maker_touch_fill_prob {
+                t.qty
+            } else {
+                Fp::ZERO
+            };
+            if reach.0 <= 0 {
                 continue;
             }
-            let q = self.affordable(r.req.action, r.req.yes_px, r.remaining.min(t.qty));
+            if through {
+                self.queue_stats.fills_through += 1;
+            } else {
+                self.queue_stats.fills_at_price += 1;
+            }
+            let q = self.affordable(r.req.action, r.req.yes_px, r.remaining.min(reach));
             if q.0 <= 0 {
                 continue;
             }
@@ -453,6 +585,41 @@ mod tests {
         sim.submit(OrderRequest::sell_yes("T", fp("0.50"), fp("5"), Tif::Ioc));
         sim.on_event(&trade(1002, "0.50", "5", Outcome::No));
         assert!(sim.drain_fills().is_empty());
+    }
+
+    #[test]
+    fn book_mode_queue_position() {
+        let mut sim = SimExchange::new(SimConfig {
+            mode: FillMode::Book,
+            latency_ms: 0,
+            default_fee: FeeModel::None,
+            ..Default::default()
+        });
+        // bid level 0.30 holds 100 contracts before we join with 10
+        sim.on_event(&MarketEvent::BookSnapshot {
+            venue: Venue::Kalshi,
+            ticker: "T".into(),
+            ts_ms: 1,
+            seq: 1,
+            bids: vec![(fp("0.30"), fp("100"))],
+            asks: vec![(fp("0.32"), fp("50"))],
+        });
+        sim.submit(OrderRequest::buy_yes("T", fp("0.30"), fp("10"), Tif::Gtc).post_only());
+        assert_eq!(sim.queue_stats.orders_rested, 1);
+        // a 60-lot seller hits the level: all of it goes to the 100 ahead of us
+        sim.on_event(&trade(10, "0.30", "60", Outcome::No));
+        sim.on_event(&MarketEvent::BookDelta { venue: Venue::Kalshi, ticker: "T".into(), ts_ms: 10, seq: 2, side: BookSide::Bid, px: fp("0.30"), delta: fp("-60") });
+        assert!(sim.drain_fills().is_empty());
+        // 30 cancelled pro-rata: ahead 40 -> 40 - 30*40/40 ... level before = 40 (100-60), ahead=40 => ahead 10
+        sim.on_event(&MarketEvent::BookDelta { venue: Venue::Kalshi, ticker: "T".into(), ts_ms: 11, seq: 3, side: BookSide::Bid, px: fp("0.30"), delta: fp("-30") });
+        assert_eq!(sim.resting.values().next().unwrap().ahead, fp("10"));
+        // a 25-lot seller: 10 to the queue ahead, 15 reach us, capped at our 10
+        sim.on_event(&trade(20, "0.30", "25", Outcome::No));
+        let f = sim.drain_fills();
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].qty, fp("10"));
+        assert!(f[0].is_maker);
+        assert_eq!(sim.queue_stats.fills_at_price, 1);
     }
 
     #[test]
