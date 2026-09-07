@@ -76,26 +76,41 @@ Once a few days of that exist, `mbot backtest --mode book --data data/live` repl
 Treat tape-mode results as a go/no-go screen, book-mode results as the real estimate, and paper
 trading as the final gate before any capital.
 
-## Results so far (2026-09-05 → 09-07, 190 settled KXBTC15M markets, tick-level refs)
+## Results so far (2026-08-28 → 09-07, 952 settled KXBTC15M markets, 1-second Coinbase refs)
 
-Reproduce: `mbot fetch-history --days 3 --ref-ticks`, then `mbot calibrate --ref-source ticks`
-and `mbot backtest --ref-source ticks --edges 0.03,0.05 [--maker]`.
+Reproduce: `mbot fetch-history --days 10 --ref-ticks`, then `mbot calibrate --ref-source ticks`
+and `mbot backtest --ref-source ticks --edges 0.03,0.05 [--maker --maker-touch-fill-prob P]`.
 
-* **Calibration** (`mbot calibrate`): with 1-minute candle refs the market's Brier beat the model's
-  in every horizon. With 1-second Coinbase ticks + learned basis (BRTI ≈ Coinbase + $6.2 ± 4.2)
-  the model is at parity overall (0.1672 vs 0.1673) and *better than the market with ≥ 5 min to
-  expiry* (300–600 s: 0.1557 vs 0.1580; 600–900 s: 0.2184 vs 0.2200), worse inside 5 min. Hence
-  `min_tau_secs = 300`.
-* **Taker backtest** (tape fill model, 250 ms latency, $1000 bankroll, 25% Kelly):
-  edge 3¢ → +$803 net after $549 fees; 5¢ → +$1048 after $410; 8¢ → +$864 after $199.
-  PnL is *insensitive to simulated latency* (still positive at 30 s), so this is a pricing edge —
-  the market over-reacts to spot moves relative to the remaining variance — not a speed race.
-* **Maker backtest** (post-only quotes at fair ∓ edge, zero maker fee): +$1.3k–2.7k depending on
-  the queue-position assumption (`--maker-touch-fill-prob` 0 → 0.5). Robust to 3 s latency,
-  collapses at 10 s (stale quotes get picked off).
-* **Caveats that matter**: 3 days is one vol regime (BTC realized ≈ 14.5% annualized); fills are
-  inferred from the trade tape, not real books; max drawdown ≈ 80–100% of bankroll at these
-  position caps, so sizing is far from final. The next gate is `mbot paper` on live books.
+**Model quality** (`mbot calibrate`, 375k prints, 945 independent outcomes, spot ≤ 10 s old):
+
+| variant | Brier model | Brier market | "model > mkt + 3¢" pays (pre-fee) |
+|---|---|---|---|
+| realized vol, no blend | 0.1622 | 0.1615 | +3.5¢ YES / +1.1¢ NO |
+| realized vol, blend 0.5 toward market | **0.1651** | 0.1654 | +5.2¢ YES / +1.4¢ NO |
+| vol floor 20 / 30 / 40 % | worse | | negative |
+| λ = 0.99, or 300 s sampling | worse | | |
+
+So: the model is at *parity* with the market — a hair worse raw, a hair better shrunk toward the
+market — in every horizon bucket. Learned basis BRTI ≈ Coinbase + $3.8 ± 4.2. There is a small
+residual signal (a few cents/contract where model and market disagree) but no large mispricing.
+
+**Taker execution** (tape fill model, 250 ms, $1000, ≤ 5 % of cash per market, ≤ 3 entries):
+every variant loses on 10 days (−$139 … −$790): gross ≈ +$200 at best against ~$350 of 7 %
+taker fees. A ~1¢ gross edge cannot pay a 1.75¢ fee. **Taker mode is dead** for this market.
+(The earlier 3-day +$1k was one calm regime; 08-30/31 jump days wiped it out — the fills show
+$100 positions filled within 20–120 s of open and averaged down into the move. Hence
+`max_entries_per_market` and `notional_frac_of_cash`.)
+
+**Maker execution** (post-only quotes at fair ∓ edge, zero maker fee): the result is *entirely*
+a function of the queue-position assumption the tape cannot resolve —
+`--maker-touch-fill-prob` 0.5 → +$7.5–10.8k, 0.25 → +$6–8k, 0.0 (filled only when price trades
+*through* us, i.e. pure adverse selection) → −$1,000 wipe-out. Real books are required to
+measure where we actually sit in the queue; that is what `mbot paper --record` with API keys
+produces, and it is the next gate.
+
+**Implied vol**: backing σ out of individual binary prints is ill-conditioned when the market lags
+spot (single prints imply >1000 % vol); it is kept as a rolling median for research
+(`vol_source = "implied" | "max" | "mean"`) but does not beat realized vol in calibration.
 
 ## Fees
 

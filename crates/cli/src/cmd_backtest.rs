@@ -48,6 +48,15 @@ pub struct Args {
     /// Override config: minimum seconds to expiry to trade
     #[arg(long)]
     pub min_tau_secs: Option<i64>,
+    /// Override config: realized | implied | max | mean
+    #[arg(long)]
+    pub vol_source: Option<String>,
+    /// Override config: weight on market mid in the blended fair value
+    #[arg(long)]
+    pub blend: Option<f64>,
+    /// Override config: max taker entries per market
+    #[arg(long)]
+    pub max_entries: Option<u32>,
     /// Probability a resting order fills when the tape prints at (not through) its price
     #[arg(long, default_value_t = 0.5)]
     pub maker_touch_fill_prob: f64,
@@ -75,6 +84,15 @@ pub async fn run(a: Args) -> Result<()> {
     }
     if let Some(t) = a.min_tau_secs {
         cfg.min_tau_secs = t;
+    }
+    if let Some(v) = &a.vol_source {
+        cfg.vol_source = v.clone();
+    }
+    if let Some(v) = a.blend {
+        cfg.market_blend = v;
+    }
+    if let Some(v) = a.max_entries {
+        cfg.max_entries_per_market = v;
     }
 
     let filter = HistoryFilter {
@@ -115,11 +133,14 @@ pub async fn run(a: Args) -> Result<()> {
         bt.run(&events);
         let report = bt.report(Fp::from_f64(a.bankroll));
         println!(
-            "\n=== min_edge = {edge:.3} | latency {} ms | {} fills | {} | min_tau {}s ===\n{}",
+            "\n=== min_edge = {edge:.3} | latency {} ms | {} fills | {} | min_tau {}s | vol {} | blend {} | max_entries {} ===\n{}",
             a.latency_ms,
             a.mode,
             if cfg.maker { "MAKER" } else { "TAKER" },
             cfg.min_tau_secs,
+            cfg.vol_source,
+            cfg.market_blend,
+            cfg.max_entries_per_market,
             report.summary()
         );
         let tag = format!(

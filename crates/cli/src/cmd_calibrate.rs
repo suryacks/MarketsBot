@@ -9,7 +9,7 @@ use clap::Args as ClapArgs;
 use mb_backtest::history::{load_events, HistoryFilter, RefSource};
 use mb_core::{MarketEvent, Outcome};
 use mb_strategy::fair_value::prob_above;
-use mb_strategy::vol::RealizedVol;
+use mb_strategy::vol::{ImpliedVol, RealizedVol, VolModel, VolSource};
 use mb_strategy::Btc15mConfig;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,6 +38,24 @@ pub struct Args {
     /// Edge threshold for the "does acting on the signal pay?" table
     #[arg(long, default_value_t = 0.03)]
     pub edge: f64,
+    /// Skip samples whose reference price is older than this (the strategy has the same guard)
+    #[arg(long, default_value_t = 10_000)]
+    pub max_spot_age_ms: i64,
+    /// Override config: annualized vol floor
+    #[arg(long)]
+    pub vol_floor: Option<f64>,
+    /// Override config: EWMA lambda
+    #[arg(long)]
+    pub vol_lambda: Option<f64>,
+    /// Override config: variance sample interval (seconds)
+    #[arg(long)]
+    pub vol_sample_secs: Option<f64>,
+    /// Override config: weight on the market price in the blended fair value (0..1)
+    #[arg(long)]
+    pub blend: Option<f64>,
+    /// Override config: realized | implied | max | mean
+    #[arg(long)]
+    pub vol_source: Option<String>,
 }
 
 struct Sample {
@@ -98,6 +116,21 @@ pub fn parse_ref_source(s: &str) -> RefSource {
 pub async fn run(a: Args) -> Result<()> {
     let mut cfg = if a.config.exists() { Btc15mConfig::load(&a.config)? } else { Btc15mConfig::default() };
     cfg.series = a.series.clone();
+    if let Some(v) = a.vol_floor {
+        cfg.vol_floor_annual = v;
+    }
+    if let Some(v) = a.vol_lambda {
+        cfg.vol_lambda = v;
+    }
+    if let Some(v) = a.vol_sample_secs {
+        cfg.vol_sample_secs = v;
+    }
+    if let Some(v) = a.blend {
+        cfg.market_blend = v;
+    }
+    if let Some(v) = &a.vol_source {
+        cfg.vol_source = v.clone();
+    }
     let filter = HistoryFilter {
         series: Some(a.series.clone()),
         from_ms: a.from.as_deref().map(|s| crate::cmd_backtest::parse_day(s, false)).transpose()?.unwrap_or(0),
@@ -115,7 +148,13 @@ pub async fn run(a: Args) -> Result<()> {
         last_sample_ms: i64,
     }
     let mut mkts: HashMap<String, Mkt> = HashMap::new();
-    let mut vol = RealizedVol::new(cfg.vol_lambda, cfg.vol_floor_annual, cfg.vol_cap_annual, (cfg.vol_sample_secs * 1000.0) as i64);
+    let mut vol = VolModel::new(
+        RealizedVol::new(cfg.vol_lambda, cfg.vol_floor_annual, cfg.vol_cap_annual, (cfg.vol_sample_secs * 1000.0) as i64),
+        ImpliedVol::new(cfg.iv_lambda),
+        VolSource::parse(&cfg.vol_source),
+        cfg.vol_floor_annual,
+        cfg.vol_cap_annual,
+    );
     let mut basis = mb_strategy::basis::BasisEstimator::new(cfg.settle_avg_secs, cfg.basis_lambda);
     let mut spot: Option<(i64, f64)> = None;
     let mut done: Vec<(Sample, f64)> = Vec::new();
@@ -144,7 +183,7 @@ pub async fn run(a: Args) -> Result<()> {
             }
             MarketEvent::Ref(r) => {
                 if r.symbol == cfg.ref_symbol {
-                    vol.update(r.ts_ms, r.px);
+                    vol.on_ref(r.ts_ms, r.px);
                     basis.on_ref(r.ts_ms, r.px);
                     spot = Some((r.ts_ms, r.px));
                 }
@@ -153,19 +192,23 @@ pub async fn run(a: Args) -> Result<()> {
                 let Some(m) = mkts.get_mut(&t.ticker) else { continue };
                 let Some((sts, s)) = spot else { continue };
                 let tau = (m.close_ms - t.ts_ms) as f64 / 1000.0;
-                if tau < a.min_tau_secs as f64 || t.ts_ms - m.last_sample_ms < a.sample_every_ms {
-                    continue;
-                }
-                m.last_sample_ms = t.ts_ms;
                 let b = if cfg.auto_basis && basis.samples() > 0 { basis.basis() } else { cfg.ref_basis };
-                let fair = prob_above(s + b, m.strike, vol.sigma_per_sec(), tau, cfg.settle_avg_secs);
-                m.samples.push(Sample {
-                    fair,
-                    px: t.yes_px.to_f64(),
-                    tau,
-                    spot_age_ms: t.ts_ms - sts,
-                    mkt_idx: m.idx,
-                });
+                if t.ts_ms - sts <= a.max_spot_age_ms && tau >= 120.0 {
+                    // learn implied vol from every fresh print (sample is scored *before* this update)
+                    let model_before = prob_above(s + b, m.strike, vol.sigma_per_sec(), tau, cfg.settle_avg_secs);
+                    if tau >= a.min_tau_secs as f64 && t.ts_ms - m.last_sample_ms >= a.sample_every_ms {
+                        m.last_sample_ms = t.ts_ms;
+                        let fair = (1.0 - cfg.market_blend) * model_before + cfg.market_blend * t.yes_px.to_f64();
+                        m.samples.push(Sample {
+                            fair,
+                            px: t.yes_px.to_f64(),
+                            tau,
+                            spot_age_ms: t.ts_ms - sts,
+                            mkt_idx: m.idx,
+                        });
+                    }
+                    vol.on_print(s + b, m.strike, t.yes_px.to_f64(), tau, cfg.settle_avg_secs);
+                }
             }
             MarketEvent::Settlement { ticker, result, .. } => {
                 if let Some(m) = mkts.remove(ticker) {
@@ -183,8 +226,15 @@ pub async fn run(a: Args) -> Result<()> {
     }
     let (bmean, bstd) = basis.stats();
     println!(
-        "\nsamples {n}  markets {n_markets}  realized vol (annual) {:.1}%  mean spot age {:.0} ms\nbasis (strike − ref 60s avg): n={} mean ${:.2} std ${:.2}  [{}]",
+        "\nsamples {n}  markets {n_markets}  vol(source {}, floor {:.0}%, λ {}, sample {}s) now {:.1}% (implied {}, n={})  blend {}  mean spot age {:.0} ms\nbasis (strike − ref 60s avg): n={} mean ${:.2} std ${:.2}  [{}]",
+        cfg.vol_source,
+        cfg.vol_floor_annual * 100.0,
+        cfg.vol_lambda,
+        cfg.vol_sample_secs,
         vol.sigma_annual() * 100.0,
+        vol.implied_annual().map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_else(|| "n/a".into()),
+        vol.implied.samples(),
+        cfg.market_blend,
         done.iter().map(|(s, _)| s.spot_age_ms as f64).sum::<f64>() / n as f64,
         basis.samples(),
         bmean,

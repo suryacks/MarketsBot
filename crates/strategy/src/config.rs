@@ -31,6 +31,14 @@ pub struct Btc15mConfig {
     pub vol_lambda: f64,
     /// Take one variance sample every N seconds (tick-frequency sampling is biased upward).
     pub vol_sample_secs: f64,
+    /// realized | implied | max | mean — where sigma comes from (implied = backed out of market prints).
+    pub vol_source: String,
+    /// EWMA weight for the implied-vol series.
+    pub iv_lambda: f64,
+    /// Max taker entries per market — no averaging down into a move.
+    pub max_entries_per_market: u32,
+    /// Per-market notional is also capped at this fraction of current cash.
+    pub notional_frac_of_cash: f64,
     /// Floor / cap on annualized volatility used for pricing.
     pub vol_floor_annual: f64,
     pub vol_cap_annual: f64,
@@ -50,6 +58,12 @@ pub struct Btc15mConfig {
     pub ref_basis: f64,
     /// EWMA weight on the previous basis estimate.
     pub basis_lambda: f64,
+    /// Shrink the model toward the market: fair_used = (1−w)·model + w·market_mid.
+    /// The market knows the tails better than a 30-minute lognormal; w≈0.3–0.5 tames overconfidence.
+    pub market_blend: f64,
+    /// Only trade when the (blended) fair value is inside [fair_min, fair_max].
+    pub fair_min: f64,
+    pub fair_max: f64,
     /// Maker mode: rest post-only quotes at fair ∓ min_edge instead of taking the touch.
     pub maker: bool,
     /// Contracts per resting quote in maker mode.
@@ -71,6 +85,10 @@ impl Default for Btc15mConfig {
             warmup_secs: 5,
             vol_lambda: 0.97,
             vol_sample_secs: 60.0,
+            vol_source: "realized".into(),
+            iv_lambda: 0.98,
+            max_entries_per_market: 3,
+            notional_frac_of_cash: 0.05,
             vol_floor_annual: 0.08,
             vol_cap_annual: 2.0,
             requote_ms: 1_000,
@@ -81,6 +99,9 @@ impl Default for Btc15mConfig {
             auto_basis: true,
             ref_basis: 0.0,
             basis_lambda: 0.9,
+            market_blend: 0.0,
+            fair_min: 0.0,
+            fair_max: 1.0,
             maker: false,
             maker_qty: 10.0,
         }

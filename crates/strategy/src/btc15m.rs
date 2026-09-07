@@ -11,7 +11,7 @@
 use crate::basis::BasisEstimator;
 use crate::config::Btc15mConfig;
 use crate::fair_value::{kelly_fraction_buy, prob_above};
-use crate::vol::RealizedVol;
+use crate::vol::{ImpliedVol, RealizedVol, VolModel, VolSource};
 use mb_core::{Action, Context, Fill, Fp, MarketEvent, MarketInfo, OrderId, OrderRequest, Strategy, Tif};
 use std::collections::HashMap;
 use tracing::{debug, info};
@@ -24,13 +24,14 @@ struct Active {
     last_order_ts_ms: i64,
     /// Sum of cost basis in dollars spent in this market.
     notional: f64,
+    entries: u32,
     bid_order: Option<(OrderId, Fp)>,
     ask_order: Option<(OrderId, Fp)>,
 }
 
 pub struct Btc15mStrategy {
     cfg: Btc15mConfig,
-    vol: RealizedVol,
+    vol: VolModel,
     basis: BasisEstimator,
     spot: Option<(i64, f64)>,
     active: HashMap<String, Active>,
@@ -57,11 +58,12 @@ pub fn kalshi_tick(px: Fp) -> Fp {
 
 impl Btc15mStrategy {
     pub fn new(cfg: Btc15mConfig) -> Self {
-        let vol = RealizedVol::new(
-            cfg.vol_lambda,
+        let vol = VolModel::new(
+            RealizedVol::new(cfg.vol_lambda, cfg.vol_floor_annual, cfg.vol_cap_annual, (cfg.vol_sample_secs * 1000.0) as i64),
+            ImpliedVol::new(cfg.iv_lambda),
+            VolSource::parse(&cfg.vol_source),
             cfg.vol_floor_annual,
             cfg.vol_cap_annual,
-            (cfg.vol_sample_secs * 1000.0) as i64,
         );
         let basis = BasisEstimator::new(cfg.settle_avg_secs, cfg.basis_lambda);
         Self {
@@ -111,6 +113,7 @@ impl Btc15mStrategy {
             close_ts_ms: m.close_ts_ms,
             last_order_ts_ms: 0,
             notional: 0.0,
+            entries: 0,
             bid_order: None,
             ask_order: None,
         });
@@ -157,7 +160,18 @@ impl Btc15mStrategy {
         }
 
         let tau = (a.close_ts_ms - now) as f64 / 1000.0;
-        let fair = prob_above(spot + self.effective_basis(), a.strike, self.vol.sigma_per_sec(), tau, self.cfg.settle_avg_secs);
+        let model = prob_above(spot + self.effective_basis(), a.strike, self.vol.sigma_per_sec(), tau, self.cfg.settle_avg_secs);
+        let fair = match (self.cfg.market_blend > 0.0, ctx.book(ticker).and_then(|b| b.mid())) {
+            (true, Some(mid)) => (1.0 - self.cfg.market_blend) * model + self.cfg.market_blend * mid.to_f64(),
+            _ => model,
+        };
+        if fair < self.cfg.fair_min || fair > self.cfg.fair_max {
+            self.stats.skipped_window += 1;
+            if self.cfg.maker {
+                self.cancel_quotes(ticker, ctx);
+            }
+            return;
+        }
 
         if self.cfg.maker {
             self.evaluate_maker(ticker, fair, ctx);
@@ -176,12 +190,16 @@ impl Btc15mStrategy {
             return;
         };
         let (best_bid, best_ask) = (book.best_bid(), book.best_ask());
+        if a.entries >= self.cfg.max_entries_per_market {
+            return;
+        }
         let pos = ctx.position(ticker);
         let fee_model = ctx.fee_model(ticker);
         let bankroll = ctx.cash().to_f64().max(0.0);
         let max_q = self.cfg.max_contracts_per_market;
         let min_touch = Fp::from_f64(self.cfg.min_touch_qty);
-        let notional_room = self.cfg.max_notional_per_market - a.notional;
+        let notional_cap = self.cfg.max_notional_per_market.min(self.cfg.notional_frac_of_cash * bankroll);
+        let notional_room = notional_cap - a.notional;
 
         // --- buy YES if fair > ask + fee + edge ---
         if let Some((ask, ask_qty)) = best_ask
@@ -207,6 +225,7 @@ impl Btc15mStrategy {
                     self.stats.orders += 1;
                     if let Some(x) = self.active.get_mut(ticker) {
                         x.last_order_ts_ms = now;
+                        x.entries += 1;
                     }
                     return;
                 }
@@ -238,6 +257,7 @@ impl Btc15mStrategy {
                     self.stats.orders += 1;
                     if let Some(x) = self.active.get_mut(ticker) {
                         x.last_order_ts_ms = now;
+                        x.entries += 1;
                     }
                 }
             }
@@ -330,7 +350,7 @@ impl Strategy for Btc15mStrategy {
                 if r.symbol != self.cfg.ref_symbol {
                     return;
                 }
-                self.vol.update(r.ts_ms, r.px);
+                self.vol.on_ref(r.ts_ms, r.px);
                 self.basis.on_ref(r.ts_ms, r.px);
                 self.spot = Some((r.ts_ms, r.px));
                 let tickers: Vec<String> = self.active.keys().cloned().collect();
@@ -348,7 +368,17 @@ impl Strategy for Btc15mStrategy {
                 }
             }
             MarketEvent::Trade(t) => {
-                if self.active.contains_key(&t.ticker) {
+                if let Some(a) = self.active.get(&t.ticker) {
+                    // every fresh print teaches the implied-vol series
+                    if let Some((sts, s)) = self.spot
+                        && t.ts_ms - sts <= 10_000
+                    {
+                        let tau = (a.close_ts_ms - t.ts_ms) as f64 / 1000.0;
+                        if tau >= 120.0 {
+                            let b = self.effective_basis();
+                            self.vol.on_print(s + b, a.strike, t.yes_px.to_f64(), tau, self.cfg.settle_avg_secs);
+                        }
+                    }
                     let tk = t.ticker.clone();
                     self.evaluate(&tk, ctx);
                 }

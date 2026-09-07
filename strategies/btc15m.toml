@@ -24,6 +24,14 @@ settle_avg_secs = 60.0
 # Realized-vol estimator (EWMA of per-second variance) and sanity clamps (annualized).
 vol_lambda = 0.97
 vol_sample_secs = 60.0
+# realized | implied | max | mean. "implied" backs sigma out of the market's own prints, so the
+# model borrows the crowd's tail estimate and keeps only our spot-timing + basis information.
+vol_source = "realized"
+iv_lambda = 0.98
+
+# Risk: no averaging down, and never more than this fraction of cash in one 15-minute market.
+max_entries_per_market = 3
+notional_frac_of_cash = 0.05
 vol_floor_annual = 0.08
 vol_cap_annual = 2.0
 
@@ -38,6 +46,12 @@ min_tau_secs = 300
 auto_basis = true
 ref_basis = 0.0
 basis_lambda = 0.9
+
+# Tail control. 10-day calibration (2026-08-28..09-07) showed the raw model is overconfident at the
+# extremes (model 0.97 -> realized 0.90); shrink toward the market and stay out of the tails.
+market_blend = 0.0
+fair_min = 0.0
+fair_max = 1.0
 
 # Maker mode: rest post-only quotes at fair -/+ min_edge. KXBTC15M charges makers no fee.
 maker = false
