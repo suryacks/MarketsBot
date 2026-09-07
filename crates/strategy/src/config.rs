@@ -39,6 +39,18 @@ pub struct Btc15mConfig {
     pub min_touch_qty: f64,
     /// If true, also *unwind* when fair value moves against an open position by > min_edge.
     pub allow_unwind: bool,
+    /// Only trade when at least this many seconds remain (the model is weakest near expiry).
+    pub min_tau_secs: i64,
+    /// Learn the ref-feed vs settlement-index basis from each market's strike (see basis.rs).
+    pub auto_basis: bool,
+    /// Fixed basis (dollars added to spot) used when auto_basis is off or has no samples yet.
+    pub ref_basis: f64,
+    /// EWMA weight on the previous basis estimate.
+    pub basis_lambda: f64,
+    /// Maker mode: rest post-only quotes at fair ∓ min_edge instead of taking the touch.
+    pub maker: bool,
+    /// Contracts per resting quote in maker mode.
+    pub maker_qty: f64,
 }
 
 impl Default for Btc15mConfig {
@@ -61,6 +73,12 @@ impl Default for Btc15mConfig {
             settle_avg_secs: 60.0,
             min_touch_qty: 1.0,
             allow_unwind: false,
+            min_tau_secs: 300,
+            auto_basis: true,
+            ref_basis: 0.0,
+            basis_lambda: 0.9,
+            maker: false,
+            maker_qty: 10.0,
         }
     }
 }

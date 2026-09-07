@@ -2,6 +2,7 @@
 //! in the backtester, the paper trader and live.
 
 pub mod arb;
+pub mod basis;
 pub mod btc15m;
 pub mod config;
 pub mod fair_value;

@@ -328,6 +328,7 @@ pub async fn paper(a: PaperArgs) -> Result<()> {
         touch_ttl_ms: 2_000,
         initial_cash: Fp::from_f64(a.bankroll),
         default_fee: feeds.fee_models.get(&cfg.series).cloned().unwrap_or_else(FeeModel::kalshi_default),
+        maker_touch_fill_prob: 0.5,
     });
     for (s, fm) in &feeds.fee_models {
         sim.set_fee_model(s, fm.clone());

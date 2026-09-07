@@ -27,3 +27,15 @@ vol_cap_annual = 2.0
 requote_ms = 1000
 min_touch_qty = 1.0
 allow_unwind = false
+
+# The model beats the market only with >= 5 min to expiry; inside that the market has the live index.
+min_tau_secs = 300
+
+# Coinbase last-trade vs BRTI basis, learned from each market's strike (strike == 60s index avg before open).
+auto_basis = true
+ref_basis = 0.0
+basis_lambda = 0.9
+
+# Maker mode: rest post-only quotes at fair -/+ min_edge. KXBTC15M charges makers no fee.
+maker = false
+maker_qty = 10.0

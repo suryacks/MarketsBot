@@ -116,6 +116,7 @@ pub async fn run(a: Args) -> Result<()> {
     }
     let mut mkts: HashMap<String, Mkt> = HashMap::new();
     let mut vol = RealizedVol::new(cfg.vol_lambda, cfg.vol_floor_annual, cfg.vol_cap_annual, (cfg.vol_sample_secs * 1000.0) as i64);
+    let mut basis = mb_strategy::basis::BasisEstimator::new(cfg.settle_avg_secs, cfg.basis_lambda);
     let mut spot: Option<(i64, f64)> = None;
     let mut done: Vec<(Sample, f64)> = Vec::new();
     let mut n_markets = 0usize;
@@ -127,6 +128,7 @@ pub async fn run(a: Args) -> Result<()> {
                     && let Some(k) = m.floor_strike
                     && !mkts.contains_key(&m.ticker)
                 {
+                    basis.on_market_open(m.open_ts_ms, k);
                     n_markets += 1;
                     mkts.insert(
                         m.ticker.clone(),
@@ -143,6 +145,7 @@ pub async fn run(a: Args) -> Result<()> {
             MarketEvent::Ref(r) => {
                 if r.symbol == cfg.ref_symbol {
                     vol.update(r.ts_ms, r.px);
+                    basis.on_ref(r.ts_ms, r.px);
                     spot = Some((r.ts_ms, r.px));
                 }
             }
@@ -154,7 +157,8 @@ pub async fn run(a: Args) -> Result<()> {
                     continue;
                 }
                 m.last_sample_ms = t.ts_ms;
-                let fair = prob_above(s, m.strike, vol.sigma_per_sec(), tau, cfg.settle_avg_secs);
+                let b = if cfg.auto_basis && basis.samples() > 0 { basis.basis() } else { cfg.ref_basis };
+                let fair = prob_above(s + b, m.strike, vol.sigma_per_sec(), tau, cfg.settle_avg_secs);
                 m.samples.push(Sample {
                     fair,
                     px: t.yes_px.to_f64(),
@@ -177,7 +181,16 @@ pub async fn run(a: Args) -> Result<()> {
     if n == 0 {
         anyhow::bail!("no samples (no settled markets with trades + ref prices in range)");
     }
-    println!("\nsamples {n}  markets {n_markets}  realized vol (annual) {:.1}%  mean spot age {:.0} ms", vol.sigma_annual() * 100.0, done.iter().map(|(s, _)| s.spot_age_ms as f64).sum::<f64>() / n as f64);
+    let (bmean, bstd) = basis.stats();
+    println!(
+        "\nsamples {n}  markets {n_markets}  realized vol (annual) {:.1}%  mean spot age {:.0} ms\nbasis (strike − ref 60s avg): n={} mean ${:.2} std ${:.2}  [{}]",
+        vol.sigma_annual() * 100.0,
+        done.iter().map(|(s, _)| s.spot_age_ms as f64).sum::<f64>() / n as f64,
+        basis.samples(),
+        bmean,
+        bstd,
+        if cfg.auto_basis { "auto-applied" } else { format!("fixed ref_basis={}", cfg.ref_basis).leak() }
+    );
     let hdr = format!("{:<12} {:>8} {:>5} {:>8} {:>8} {:>8} {:>10} {:>10}", "bucket", "n", "mkts", "fair", "mkt", "yes%", "brierModel", "brierMkt");
     println!("(n = samples; mkts = independent markets — outcomes within a market are perfectly correlated, judge significance by mkts)");
 

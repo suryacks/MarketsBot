@@ -42,6 +42,15 @@ pub struct Args {
     /// Comma-separated min_edge values to sweep (overrides config)
     #[arg(long)]
     pub edges: Option<String>,
+    /// Override config: maker mode (rest post-only quotes) instead of taking
+    #[arg(long)]
+    pub maker: bool,
+    /// Override config: minimum seconds to expiry to trade
+    #[arg(long)]
+    pub min_tau_secs: Option<i64>,
+    /// Probability a resting order fills when the tape prints at (not through) its price
+    #[arg(long, default_value_t = 0.5)]
+    pub maker_touch_fill_prob: f64,
     /// Where to write CSV reports
     #[arg(long, default_value = "reports")]
     pub report: PathBuf,
@@ -61,6 +70,12 @@ pub async fn run(a: Args) -> Result<()> {
         Btc15mConfig::default()
     };
     cfg.series = a.series.clone();
+    if a.maker {
+        cfg.maker = true;
+    }
+    if let Some(t) = a.min_tau_secs {
+        cfg.min_tau_secs = t;
+    }
 
     let filter = HistoryFilter {
         series: Some(a.series.clone()),
@@ -93,12 +108,20 @@ pub async fn run(a: Args) -> Result<()> {
             touch_ttl_ms: a.touch_ttl_ms,
             initial_cash: Fp::from_f64(a.bankroll),
             default_fee: FeeModel::kalshi("quadratic", a.fee_multiplier),
+            maker_touch_fill_prob: a.maker_touch_fill_prob,
         });
         let strat = Btc15mStrategy::new(c);
         let mut bt = Backtester::new(sim, Box::new(strat));
         bt.run(&events);
         let report = bt.report(Fp::from_f64(a.bankroll));
-        println!("\n=== min_edge = {edge:.3} | latency {} ms | {} mode ===\n{}", a.latency_ms, a.mode, report.summary());
+        println!(
+            "\n=== min_edge = {edge:.3} | latency {} ms | {} fills | {} | min_tau {}s ===\n{}",
+            a.latency_ms,
+            a.mode,
+            if cfg.maker { "MAKER" } else { "TAKER" },
+            cfg.min_tau_secs,
+            report.summary()
+        );
         let tag = format!(
             "{}-{}-{}-edge{:.3}",
             a.series,

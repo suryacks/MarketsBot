@@ -33,6 +33,9 @@ pub struct SimConfig {
     pub touch_ttl_ms: i64,
     pub initial_cash: Fp,
     pub default_fee: FeeModel,
+    /// Probability that a resting order fills when the tape prints *at* its price
+    /// (we don't know our queue position); prints *through* it always fill.
+    pub maker_touch_fill_prob: f64,
 }
 
 impl Default for SimConfig {
@@ -43,8 +46,19 @@ impl Default for SimConfig {
             touch_ttl_ms: 2_000,
             initial_cash: Fp::from_int(1_000),
             default_fee: FeeModel::kalshi_default(),
+            maker_touch_fill_prob: 0.5,
         }
     }
+}
+
+/// Deterministic pseudo-random in [0,1) from a trade id, so runs are reproducible.
+fn hash01(s: &str) -> f64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    (h >> 11) as f64 / (1u64 << 53) as f64
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +119,32 @@ impl SimExchange {
 
     pub fn total_cash(&self) -> Fp {
         self.cash
+    }
+
+    /// Cash not locked as collateral. A short YES position of q contracts must be
+    /// able to pay $1·q at settlement; since selling YES at p already credited
+    /// p·q, the locked amount is exactly q (== Kalshi's (1−p)·q collateral on the
+    /// original balance). Long positions are already paid for.
+    pub fn free_cash(&self) -> Fp {
+        let locked: Fp = self.positions.values().filter(|p| p.yes_qty.0 < 0).map(|p| -p.yes_qty).sum();
+        self.cash - locked
+    }
+
+    /// Largest quantity we can afford at this price/side.
+    fn affordable(&self, action: Action, px: Fp, qty: Fp) -> Fp {
+        let free = self.free_cash();
+        if free.0 <= 0 {
+            return Fp::ZERO;
+        }
+        let unit = match action {
+            Action::Buy => px,
+            Action::Sell => px.complement(),
+        };
+        if unit.0 <= 0 {
+            return qty;
+        }
+        // truncate to whole contracts so tiny remainders don't churn
+        qty.min(free.div(unit).round_down_to(Fp::ONE))
     }
 
     pub fn positions(&self) -> &HashMap<String, Position> {
@@ -238,6 +278,10 @@ impl SimExchange {
         let sweep = if req.post_only { Default::default() } else { book.sweep(side, req.qty, Some(req.yes_px)) };
         let mut remaining = req.qty;
         for (px, q) in sweep.levels.iter() {
+            let q = &self.affordable(req.action, *px, *q);
+            if q.0 <= 0 {
+                break;
+            }
             self.record_fill(id, &req, *px, *q, false);
             remaining -= *q;
             // consume liquidity
@@ -268,15 +312,19 @@ impl SimExchange {
         let ids: Vec<OrderId> = self.resting.iter().filter(|(_, r)| r.req.ticker == t.ticker).map(|(id, _)| *id).collect();
         for id in ids {
             let r = self.resting.get(&id).unwrap().clone();
-            let hit = match (r.req.action, t.taker) {
-                (Action::Buy, Outcome::No) => t.yes_px <= r.req.yes_px,
-                (Action::Sell, Outcome::Yes) => t.yes_px >= r.req.yes_px,
-                _ => false,
+            let (through, at) = match (r.req.action, t.taker) {
+                (Action::Buy, Outcome::No) => (t.yes_px < r.req.yes_px, t.yes_px == r.req.yes_px),
+                (Action::Sell, Outcome::Yes) => (t.yes_px > r.req.yes_px, t.yes_px == r.req.yes_px),
+                _ => (false, false),
             };
+            let hit = through || (at && hash01(&format!("{}{}", t.trade_id, id.0)) < self.cfg.maker_touch_fill_prob);
             if !hit {
                 continue;
             }
-            let q = r.remaining.min(t.qty);
+            let q = self.affordable(r.req.action, r.req.yes_px, r.remaining.min(t.qty));
+            if q.0 <= 0 {
+                continue;
+            }
             self.record_fill(id, &r.req, r.req.yes_px, q, true);
             let rem = r.remaining - q;
             if rem.is_positive() {
@@ -316,7 +364,7 @@ impl Context for SimExchange {
         })
     }
     fn cash(&self) -> Fp {
-        self.cash
+        self.free_cash()
     }
     fn fee_model(&self, ticker: &str) -> FeeModel {
         self.fee_for(ticker)
@@ -388,10 +436,31 @@ mod tests {
     }
 
     #[test]
+    fn cannot_exceed_bankroll() {
+        let mut sim = SimExchange::new(SimConfig {
+            latency_ms: 0,
+            default_fee: FeeModel::None,
+            initial_cash: Fp::from_int(10),
+            ..Default::default()
+        });
+        sim.on_event(&trade(1000, "0.50", "100", Outcome::Yes)); // ask 0.50 x 100
+        sim.submit(OrderRequest::buy_yes("T", fp("0.50"), fp("100"), Tif::Ioc));
+        sim.on_event(&trade(1001, "0.50", "1", Outcome::Yes));
+        let f = sim.drain_fills();
+        assert_eq!(f[0].qty, fp("20")); // $10 / 0.50
+        assert_eq!(sim.free_cash(), Fp::ZERO);
+        // selling YES locks $1 per contract: with $0 free nothing fills
+        sim.submit(OrderRequest::sell_yes("T", fp("0.50"), fp("5"), Tif::Ioc));
+        sim.on_event(&trade(1002, "0.50", "5", Outcome::No));
+        assert!(sim.drain_fills().is_empty());
+    }
+
+    #[test]
     fn resting_order_fills_on_tape_as_maker() {
         let mut sim = SimExchange::new(SimConfig {
             latency_ms: 0,
             default_fee: FeeModel::kalshi("quadratic_with_maker_fees", 1.0),
+            maker_touch_fill_prob: 1.0,
             ..Default::default()
         });
         sim.submit(OrderRequest::buy_yes("T", fp("0.30"), fp("5"), Tif::Gtc));
