@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+mb-core = { path = "crates/core" }
+mb-kalshi = { path = "crates/kalshi" }
+mb-polymarket = { path = "crates/polymarket" }
+mb-coinbase = { path = "crates/coinbase" }
+mb-data = { path = "crates/data" }
+mb-strategy = { path = "crates/strategy" }
+mb-backtest = { path = "crates/backtest" }
+
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.13", features = ["json", "query", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+rsa = { version = "0.9", features = ["sha2"] }
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+arrow = "59"
+parquet = "59"
+serde_arrow = { version = "0.15", features = ["arrow-59"] }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"
+dotenvy = "0.15"
+libm = "0.2"
+url = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = 1
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

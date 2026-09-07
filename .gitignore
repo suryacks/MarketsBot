@@ -1,0 +1,9 @@
+/target
+/data/
+/reports/
+.env
+*.pem
+*.key
+*.p8
+*.log
+.DS_Store

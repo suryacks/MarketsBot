@@ -1,0 +1,28 @@
+# Short-dated crypto binary fair-value strategy (Kalshi KXBTC15M and friends).
+# See crates/strategy/src/config.rs for every field and its default.
+
+series = "KXBTC15M"
+ref_symbol = "BTC-USD"
+
+# Edge required after fees before taking, in probability points (0.03 = 3¢ per contract).
+min_edge = 0.03
+# Fraction of full Kelly. 0.25 is conservative; full Kelly on a mis-specified model is how you blow up.
+kelly_fraction = 0.25
+
+max_contracts_per_market = 200.0
+max_notional_per_market = 100.0
+max_order_qty = 50.0
+
+# Settlement is the mean of the last 60 s of the index; don't trade into it.
+no_trade_last_secs = 75
+warmup_secs = 5
+settle_avg_secs = 60.0
+
+# Realized-vol estimator (EWMA of per-second variance) and sanity clamps (annualized).
+vol_lambda = 0.97
+vol_floor_annual = 0.25
+vol_cap_annual = 2.0
+
+requote_ms = 1000
+min_touch_qty = 1.0
+allow_unwind = false
