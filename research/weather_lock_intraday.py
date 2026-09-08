@@ -114,7 +114,7 @@ def main():
             if t_.startswith("B"):
                 c = float(t_[1:]); lo, hi = math.floor(c), math.ceil(c); kind = "between"
             elif t_.startswith("T"):
-                lo = math.ceil(float(t_[1:])); hi = 999; kind = "greater"  # T80 == "greater than 80" => >= 81 for integers
+                lo = int(math.floor(float(t_[1:]))) + 1; hi = 999; kind = "greater"  # T80 == "greater than 80" => >= 81 for whole degrees
             else:
                 continue
             cross = next((t for t, m in run if (m >= lo if kind == "greater" else m > hi)), None)
