@@ -120,10 +120,18 @@ SERIES = {  # prefix -> calendar key
 def main():
     days = int(sys.argv[sys.argv.index("--days") + 1]) if "--days" in sys.argv else 150
     since = int(time.time()) - days * 86400
-    cal = {"cpi": bls_dates("cpi"), "empsit": bls_dates("empsit"), "ppi": bls_dates("ppi")}
-    bea = bea_dates()
-    cal["pce"], cal["gdp"] = bea["pce"], bea["gdp"]
-    cal["fomc"] = fomc_dates()
+    # The agencies block scripted fetches (403); dates were fetched once and stored.
+    with open("research/release_calendar.json") as f:
+        raw = json.load(f)
+    cal = {}
+    for k, v in raw.items():
+        if k.startswith("_"):
+            continue
+        s = set()
+        for d in v:
+            dt = datetime.strptime(d, "%Y-%m-%d %H:%M")
+            s.add(et_to_utc(dt.year, dt.month, dt.day, dt.hour, dt.minute))
+        cal[k] = s
     for k, v in cal.items():
         recent = sorted(t for t in v if t.timestamp() >= since)
         print(f"calendar {k}: {len(v)} dates, recent: {[t.strftime('%m-%d %H:%MZ') for t in recent[:6]]}")
