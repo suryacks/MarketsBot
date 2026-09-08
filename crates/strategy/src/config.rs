@@ -61,6 +61,10 @@ pub struct Btc15mConfig {
     pub ref_basis: f64,
     /// EWMA weight on the previous basis estimate.
     pub basis_lambda: f64,
+    /// Window (seconds) of reference prices averaged when measuring the basis against a
+    /// market's strike. Independent of `settle_avg_secs` so point-settled markets (gold)
+    /// still get a stable basis.
+    pub basis_window_secs: f64,
     /// Shrink the model toward the market: fair_used = (1−w)·model + w·market_mid.
     /// The market knows the tails better than a 30-minute lognormal; w≈0.3–0.5 tames overconfidence.
     pub market_blend: f64,
@@ -108,6 +112,7 @@ impl Default for Btc15mConfig {
             auto_basis: true,
             ref_basis: 0.0,
             basis_lambda: 0.9,
+            basis_window_secs: 60.0,
             market_blend: 0.0,
             fair_min: 0.0,
             fair_max: 1.0,

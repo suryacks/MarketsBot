@@ -8,6 +8,7 @@
 
 pub mod nowcast;
 pub mod nws;
+pub mod yahoo;
 
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};

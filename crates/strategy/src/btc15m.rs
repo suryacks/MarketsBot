@@ -69,7 +69,7 @@ impl Btc15mStrategy {
             cfg.vol_floor_annual,
             cfg.vol_cap_annual,
         );
-        let basis = BasisEstimator::new(cfg.settle_avg_secs, cfg.basis_lambda);
+        let basis = BasisEstimator::new(if cfg.basis_window_secs > 0.0 { cfg.basis_window_secs } else { cfg.settle_avg_secs.max(60.0) }, cfg.basis_lambda);
         Self {
             cfg,
             vol,

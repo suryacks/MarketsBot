@@ -38,10 +38,12 @@ requote_ms = 500
 min_touch_qty = 1.0
 allow_unwind = false
 
-# The index IS the settlement source, so no basis correction and no blending toward the market.
-auto_basis = false
+# Live, the Pyth index IS the settlement source (basis 0). For backtests the reference is Yahoo
+# gold futures, which trade ~$40 above spot — auto_basis learns that offset from each strike.
+auto_basis = true
 ref_basis = 0.0
 basis_lambda = 0.9
+basis_window_secs = 60.0
 market_blend = 0.0
 fair_min = 0.0
 fair_max = 1.0

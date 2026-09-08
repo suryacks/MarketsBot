@@ -48,7 +48,9 @@ impl BasisEstimator {
         }
     }
 
-    /// Mean reference price over [open−window, open). None if we have < 5 points.
+    /// Mean reference price over [open−window, open). Falls back to the most recent price
+    /// before `open` (within `keep_ms`) when the feed is coarser than the window — minute
+    /// bars give only one point per 60 s, which would otherwise yield no basis at all.
     pub fn ref_avg_before(&self, open_ts_ms: i64) -> Option<f64> {
         let lo = open_ts_ms - self.window_ms;
         let mut s = 0.0;
@@ -59,15 +61,23 @@ impl BasisEstimator {
                 n += 1;
             }
         }
-        if n >= 5 { Some(s / n as f64) } else { None }
+        if n >= 2 {
+            return Some(s / n as f64);
+        }
+        self.refs
+            .iter()
+            .filter(|(t, _)| *t < open_ts_ms && open_ts_ms - *t <= self.keep_ms)
+            .next_back()
+            .map(|(_, p)| *p)
     }
 
     /// Feed a new market's strike at its open. Returns the basis sample if computable.
     pub fn on_market_open(&mut self, open_ts_ms: i64, strike: f64) -> Option<f64> {
         let avg = self.ref_avg_before(open_ts_ms)?;
         let sample = strike - avg;
-        // guard against garbage (a $2000 basis is a data problem, not a basis)
-        if !sample.is_finite() || sample.abs() > strike * 0.01 {
+        // guard against garbage (a $2000 basis is a data problem, not a basis).
+        // 3% covers the gold futures/spot basis (~1%) while still rejecting nonsense.
+        if !sample.is_finite() || sample.abs() > strike * 0.03 {
             return None;
         }
         self.basis = Some(match self.basis {
@@ -129,5 +139,17 @@ mod tests {
             b.on_ref(t * 1000, 100.0);
         }
         assert!(b.on_market_open(120_000, 150.0).is_none());
+    }
+
+    #[test]
+    fn coarse_feed_still_yields_a_basis() {
+        // one reference point per minute (Yahoo minute bars): the 60 s window holds a single
+        // point, so the estimator must fall back to the last price before open.
+        let mut b = BasisEstimator::new(60.0, 0.5);
+        for m in 0..5 {
+            b.on_ref(m * 60_000, 4440.0);
+        }
+        let s = b.on_market_open(4 * 60_000 + 30_000, 4398.0).expect("basis from coarse feed");
+        assert!((s + 42.0).abs() < 1e-6, "{s}");
     }
 }

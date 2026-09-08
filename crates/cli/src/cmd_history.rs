@@ -4,6 +4,7 @@ use futures_util::{stream, StreamExt};
 use mb_coinbase::CoinbaseRest;
 use mb_data::{write_parquet, CandleRow, MarketRow, RefRow, TradeRow};
 use mb_kalshi::{KalshiClient, MarketsQuery};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -105,6 +106,50 @@ pub async fn run(a: Args) -> Result<()> {
         .collect::<Vec<()>>()
         .await;
     info!(trades = total_trades.load(std::sync::atomic::Ordering::Relaxed), "trade tapes done");
+
+    // 3a. Yahoo reference bars (metals/energy): one call, split per UTC day
+    if let Some(sym) = a.ref_product.strip_prefix("yahoo:") {
+        let bars = mb_coinbase::yahoo::minute_bars(sym, 7).await?;
+        info!(symbol = sym, bars = bars.len(), "yahoo reference bars");
+        let mut by_day: HashMap<String, Vec<CandleRow>> = HashMap::new();
+        for c in &bars {
+            let day = chrono::DateTime::from_timestamp(c.ts, 0).unwrap().format("%Y-%m-%d").to_string();
+            by_day.entry(day).or_default().push(CandleRow {
+                source: "yahoo".into(),
+                symbol: a.ref_product.clone(),
+                ts: c.ts,
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+                volume: c.volume,
+            });
+        }
+        for (day, rows) in &by_day {
+            write_parquet(a.out.join("candles").join(&a.ref_product).join(format!("{day}.parquet")), rows)?;
+        }
+        // Reference ticks from the same bars. Yahoo timestamps a bar at its START, so the
+        // bar's CLOSE is only known 60 s later — publishing it at the bar's start time would
+        // hand the model a minute of look-ahead and manufacture an edge out of nothing.
+        // Open is published at the bar start, close at the bar end.
+        let mut refs: Vec<mb_data::RefRow> = Vec::with_capacity(bars.len() * 2);
+        for c in &bars {
+            refs.push(mb_data::RefRow { source: "yahoo".into(), symbol: a.ref_product.clone(), ts_ms: c.ts * 1000, px: c.open, avg_60s: None });
+            refs.push(mb_data::RefRow { source: "yahoo".into(), symbol: a.ref_product.clone(), ts_ms: (c.ts + 59) * 1000, px: c.close, avg_60s: None });
+        }
+        refs.sort_by_key(|r| r.ts_ms);
+        let mut by_day_r: HashMap<String, Vec<mb_data::RefRow>> = HashMap::new();
+        for r in refs {
+            let day = chrono::DateTime::from_timestamp_millis(r.ts_ms).unwrap().format("%Y-%m-%d").to_string();
+            by_day_r.entry(day).or_default().push(r);
+        }
+        for (day, rows) in &by_day_r {
+            write_parquet(a.out.join("refs").join(&a.ref_product).join(format!("{day}.parquet")), rows)?;
+        }
+        info!(days = by_day.len(), "yahoo reference written");
+        info!("done. next: mbot backtest --series {} --data {}", a.series, a.out.display());
+        return Ok(());
+    }
 
     // 3. reference candles (1-minute), per UTC day, with a 2h warmup for vol seeding
     if !a.ref_product.is_empty() {

@@ -155,7 +155,10 @@ pub async fn run(a: Args) -> Result<()> {
         cfg.vol_floor_annual,
         cfg.vol_cap_annual,
     );
-    let mut basis = mb_strategy::basis::BasisEstimator::new(cfg.settle_avg_secs, cfg.basis_lambda);
+    let mut basis = mb_strategy::basis::BasisEstimator::new(
+        if cfg.basis_window_secs > 0.0 { cfg.basis_window_secs } else { cfg.settle_avg_secs.max(60.0) },
+        cfg.basis_lambda,
+    );
     let mut spot: Option<(i64, f64)> = None;
     let mut done: Vec<(Sample, f64)> = Vec::new();
     let mut n_markets = 0usize;
