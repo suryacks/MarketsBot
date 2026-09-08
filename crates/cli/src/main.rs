@@ -6,6 +6,7 @@ mod cmd_universe;
 mod cmd_history;
 mod cmd_lab;
 mod cmd_live;
+mod cmd_news;
 mod cmd_scan;
 mod cmd_tools;
 
@@ -35,6 +36,8 @@ enum Cmd {
     BuildDataset(cmd_dataset::Args),
     /// Evaluate thousands of parametrized strategies on the dataset with walk-forward validation.
     Universe(cmd_universe::Args),
+    /// Build news sentiment features (GDELT tone/volume) for news-driven markets in the dataset.
+    BuildNews(cmd_news::Args),
     /// Record live market data (Kalshi books/trades, Coinbase ref prices, Polymarket books) to Parquet.
     Collect(cmd_live::CollectArgs),
     /// Paper-trade a strategy on live data with simulated fills (no orders sent).
@@ -70,6 +73,7 @@ async fn main() -> Result<()> {
         Cmd::Lab(a) => cmd_lab::run(a).await,
         Cmd::BuildDataset(a) => cmd_dataset::run(a).await,
         Cmd::Universe(a) => cmd_universe::run(a).await,
+        Cmd::BuildNews(a) => cmd_news::run(a).await,
         Cmd::Collect(a) => cmd_live::collect(a).await,
         Cmd::Paper(a) => cmd_live::paper(a).await,
         Cmd::Live(a) => cmd_live::live(a).await,

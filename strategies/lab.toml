@@ -57,6 +57,43 @@ days = 10
 edges = [0.03, 0.05, 0.08]
 blend = 0.5
 
+# ---- order-flow imbalance on the 15-min tape: follow or fade net aggressor volume (edges = imbalance thresholds) ----
+[[experiment]]
+name = "btc15m-flow-follow"
+description = "BTC 15-min: when net taker flow over 60 s is one-sided (≥ threshold of volume), trade with it"
+strategy = "flow-follow"
+series = ["KXBTC15M"]
+ref_product = "BTC-USD"
+days = 10
+edges = [0.5, 0.7, 0.85]
+
+[[experiment]]
+name = "btc15m-flow-fade"
+description = "BTC 15-min: fade one-sided taker flow (exhaustion / reversal)"
+strategy = "flow-fade"
+series = ["KXBTC15M"]
+ref_product = "BTC-USD"
+days = 10
+edges = [0.5, 0.7, 0.85]
+
+[[experiment]]
+name = "eth15m-flow-follow"
+description = "ETH 15-min order-flow follow"
+strategy = "flow-follow"
+series = ["KXETH15M"]
+ref_product = "ETH-USD"
+days = 10
+edges = [0.5, 0.7, 0.85]
+
+[[experiment]]
+name = "eth15m-flow-fade"
+description = "ETH 15-min order-flow fade"
+strategy = "flow-fade"
+series = ["KXETH15M"]
+ref_product = "ETH-USD"
+days = 10
+edges = [0.5, 0.7, 0.85]
+
 # ---- endgame: trade inside the 60 s settlement window using the running average (outcome locks in) ----
 [[experiment]]
 name = "btc15m-endgame"

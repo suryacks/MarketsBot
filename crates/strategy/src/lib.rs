@@ -6,7 +6,10 @@ pub mod basis;
 pub mod btc15m;
 pub mod config;
 pub mod fair_value;
+pub mod flow;
 pub mod rules;
+
+pub use flow::{FlowConfig, FlowStrategy};
 pub mod spread_maker;
 pub mod vol;
 

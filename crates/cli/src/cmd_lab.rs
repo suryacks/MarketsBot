@@ -147,7 +147,7 @@ pub async fn run(a: Args) -> Result<()> {
 
         // data: fetch if needed
         let data = PathBuf::from(&e.data);
-        if !a.no_fetch && e.strategy == "btc15m" {
+        if !a.no_fetch && (e.strategy == "btc15m" || e.strategy.starts_with("flow")) {
             for s in &e.series {
                 let have = data.join("trades").join(s).exists();
                 let have_refs = data.join("refs").join(&e.ref_product).exists();
@@ -190,7 +190,7 @@ pub async fn run(a: Args) -> Result<()> {
             config: PathBuf::from(&e.config),
             mode: if e.mode == "book" { FillMode::Book } else { FillMode::Tape },
             ref_source: parse_ref_source(&e.ref_source),
-            ref_symbol: if e.strategy == "btc15m" { Some(e.ref_product.clone()) } else { None },
+            ref_symbol: if e.strategy == "btc15m" || e.strategy.starts_with("flow") { Some(e.ref_product.clone()) } else { None },
             latency_ms: e.latency_ms,
             touch_ttl_ms: 2000,
             bankroll: e.bankroll,

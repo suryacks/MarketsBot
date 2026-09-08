@@ -47,6 +47,9 @@
   <div class="card"><h2>The pipeline <span class="muted small">a strategy must pass each stage before the next; real money is capped at $100</span></h2>
     <div class="pipe" id="pipe"></div>
     <div class="explain" style="margin-top:10px"><b>PASS</b> = net PnL &gt; 0, t-stat ≥ 2, ≥ 100 markets on historical data. <b>FAIL</b> = ≥ 100 markets and no edge. <b>INCONCLUSIVE</b> = not enough markets yet. t-stat = average per-market PnL divided by its standard error: 2 means "probably not luck", 3 means "worth money". Everything runs on a $100 bankroll with position caps to match.</div></div>
+  <div class="card"><h2>Every algorithm family tried so far <span class="muted small" id="famMeta"></span></h2>
+    <div class="explain" style="margin-bottom:8px">One row per family of strategies. "evaluated" = variants with enough trades; "pass" = survived out-of-sample. A family with zero passes after hundreds of variants is evidence the information it uses is already priced in.</div>
+    <div class="scroll"><table id="famT"><thead><tr><th>family</th><th>information used</th><th>variants evaluated</th><th>pass OOS</th><th>fail OOS</th><th>inconclusive</th><th>status</th></tr></thead><tbody></tbody></table></div></div>
   <div class="card"><h2>Experiments <span class="muted small" id="labMeta">reading reports/lab…</span></h2>
     <div class="scroll tall"><table id="labT"><thead><tr><th>strategy</th><th>markets</th><th>what it does</th><th>stage</th><th>data</th><th>markets tested</th><th>fills</th><th>net PnL / $100</th><th>PnL per contract</th><th>win%</th><th>max DD</th><th>t</th><th>verdict</th></tr></thead><tbody></tbody></table></div></div>
   <div class="card"><h2>Strategy universe <span class="muted small" id="uniMeta">no universe.json yet — run mbot build-dataset, then mbot universe</span></h2>
@@ -204,8 +207,16 @@ async function loadUniverse(){
   const fam=$('#uniFam'); const cur=fam.value; fam.innerHTML='<option value="">all</option>'+(uni.families||[]).map(f=>`<option value="${f.family}">${f.family} (${f.pass} pass / ${f.evaluated})</option>`).join(''); fam.value=cur;
   renderUniverse();
 }
+const FAM_INFO={'price-bucket':'price level alone (favorite/longshot calibration)','side-bias':'nothing but the side (YES-bias)','momentum':'recent price path, same direction','reversal':'recent price path, opposite direction','breakout':'new high / new low of the path','drift-since-open':'cumulative move since open (informed flow)','time-filter':'time of day / weekend × price level','ladder':'adjacent strikes in the same event (relative value)','bucket-sum':'Σ of bucket prices in the event vs $1','volume-surge':'trade volume spike × direction','spread-regime':'bid–ask width × price level','market-age':'how far through its life the market is','path-vol':'calm vs choppy price path','interaction':'momentum × level, drift × volume','news-tone':'GDELT news sentiment (tone) in prior 24 h','news-volume':'GDELT article volume surge','peer-drift':'moves of sibling markets in the same category'};
+function renderFamilies(){
+  if(!uni||!uni.families) return;
+  const fams=uni.families.slice().sort((a,b)=>b.pass-a.pass||b.evaluated-a.evaluated);
+  $('#famMeta').textContent=`${fams.length} families · ${uni.generated} variants · last run ${ago(uni.created_ms)}`;
+  $('#famT tbody').innerHTML=fams.map(f=>{ const st=f.evaluated===0?'no data yet':f.pass>0?`<span class="v PASS">${f.pass} PASS</span>`:f.evaluated>=50?'<span class="v FAIL">priced in</span>':'<span class="v INCONCLUSIVE">thin</span>'; return `<tr><td><b>${f.family}</b></td><td class="muted">${FAM_INFO[f.family]||''}</td><td>${f.evaluated}</td><td class="${f.pass?'pos':''}">${f.pass}</td><td>${f.fail_oos}</td><td>${f.inconclusive}</td><td>${st}</td></tr>`; }).join('');
+}
 function renderUniverse(){
   if(!uni||!uni.rows) return;
+  renderFamilies();
   $('#uniMeta').textContent=`${uni.generated} strategies generated · ${uni.evaluated} with enough trades · ${uni.markets} markets, ${uni.series} series, ${uni.samples} samples · ${new Date(uni.created_ms).toLocaleString()}`;
   const ideas=uni.distinct_ideas||[];
   $('#uniSummary').innerHTML=`<div class="stage"><h3>generated</h3><div class="big">${uni.generated}</div><ul><li>${(uni.families||[]).length} families</li></ul></div><div class="stage"><h3>looked good in-sample</h3><div class="big">${uni.passed_is}</div><ul><li>t ≥ 2 on the older half</li></ul></div><div class="stage"><h3>passed out-of-sample</h3><div class="big ${uni.passed_oos>0?'pos':''}">${uni.passed_oos}</div><ul><li>≈ ${uni.expected_false_pass.toFixed(1)} expected by pure luck</li><li><b>${ideas.length} distinct idea${ideas.length===1?'':'s'}</b> (variants across scopes/horizons collapsed)</li></ul></div><div class="stage"><h3>distinct ideas that passed</h3><ul>${ideas.slice(0,8).map(i=>`<li>${i.idea} <span class="muted">· ${i.variants} variant${i.variants===1?'':'s'}, best t ${i.best_oos_t.toFixed(1)}</span></li>`).join('')||'<li>none yet</li>'}</ul></div>`;

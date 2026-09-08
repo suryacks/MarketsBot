@@ -68,6 +68,13 @@ struct Sample {
     event_dev: f64,
     /// last-candle mid change (for volume × direction interactions)
     last_ret: f64,
+    /// news tone in the prior 24 h, and its change vs the 24 h before (NaN without news data)
+    tone: f64,
+    tone_delta: f64,
+    /// article volume ratio last 24 h vs prior 24 h (NaN without news data)
+    news_ratio: f64,
+    /// average 3-candle return of same-category peers closing within ±1 h (NaN if no peers)
+    peer_ret: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
@@ -237,6 +244,10 @@ pub async fn run(a: Args) -> Result<()> {
                 ladder_cheap: f64::NAN,
                 event_dev: f64::NAN,
                 last_ret: ret[0],
+                tone: f64::NAN,
+                tone_delta: f64::NAN,
+                news_ratio: f64::NAN,
+                peer_ret: f64::NAN,
                 series: sid,
                 category: cid,
                 horizon: h,
@@ -302,7 +313,41 @@ pub async fn run(a: Args) -> Result<()> {
             }
         }
     }
-    info!(samples = samples.len(), series = series_names.len(), categories = cat_names.len(), ladder_samples = n_ladder, bucket_samples = n_event, "samples built");
+    // ---- news features (optional) ----
+    let news_path = a.data.join("news.parquet");
+    let mut n_news = 0usize;
+    if news_path.exists() {
+        let rows: Vec<crate::cmd_news::NewsRow> = mb_data::read_parquet(&news_path)?;
+        for r in rows {
+            if let Some(&i) = idx_of.get(&(r.ticker.clone(), r.horizon_secs)) {
+                let s = &mut samples[i];
+                s.tone = r.tone;
+                s.tone_delta = r.tone - r.tone_prev;
+                s.news_ratio = if r.articles_prev > 0.0 { r.articles / r.articles_prev } else { f64::NAN };
+                n_news += 1;
+            }
+        }
+    }
+    // ---- peer drift: same category, close within ±1 h, mean 3-candle return of the others ----
+    {
+        let mut groups: HashMap<(u32, i64, i64), Vec<usize>> = HashMap::new();
+        for (i, s) in samples.iter().enumerate() {
+            groups.entry((s.category, s.horizon, s.close_ts / 3600)).or_default().push(i);
+        }
+        for members in groups.values() {
+            if members.len() < 3 {
+                continue;
+            }
+            let vals: Vec<f64> = members.iter().map(|&i| samples[i].ret[1]).collect();
+            for (k, &i) in members.iter().enumerate() {
+                let others: Vec<f64> = vals.iter().enumerate().filter(|(j, v)| *j != k && v.is_finite()).map(|(_, v)| *v).collect();
+                if others.len() >= 2 {
+                    samples[i].peer_ret = others.iter().sum::<f64>() / others.len() as f64;
+                }
+            }
+        }
+    }
+    info!(samples = samples.len(), series = series_names.len(), categories = cat_names.len(), ladder_samples = n_ladder, bucket_samples = n_event, news_samples = n_news, "samples built");
     let mut closes: Vec<i64> = markets.iter().map(|m| m.close_ts).collect();
     closes.sort();
     let split_ts = closes[closes.len() / 2];
@@ -464,6 +509,31 @@ pub async fn run(a: Args) -> Result<()> {
                 for side in [Side::BuyYes, Side::BuyNo] {
                     strategies.push((StrategyDef { family: "interaction", scope: scope.clone(), horizon: h, params: format!("drift ≥ +{x:.2} since open & volume ≥ 2× avg"), side }, Box::new(move |s| s.ret_open.is_finite() && s.ret_open >= x && s.vol_ratio.is_finite() && s.vol_ratio >= 2.0)));
                     strategies.push((StrategyDef { family: "interaction", scope: scope.clone(), horizon: h, params: format!("drift ≤ −{x:.2} since open & volume ≥ 2× avg"), side }, Box::new(move |s| s.ret_open.is_finite() && s.ret_open <= -x && s.vol_ratio.is_finite() && s.vol_ratio >= 2.0)));
+                }
+            }
+        }
+    }
+    // ---- Families 12–13: news sentiment and peer drift (ALL + category scopes) ----
+    for (scope, _) in scopes.iter().filter(|(n, _)| n == "ALL" || n.starts_with("CAT:")) {
+        for &h in &[6 * 3600i64, 24 * 3600] {
+            for &t in &[1.0f64, 2.0, 3.0] {
+                strategies.push((StrategyDef { family: "news-tone", scope: scope.clone(), horizon: h, params: format!("tone ≥ +{t:.0} (positive coverage)"), side: Side::BuyYes }, Box::new(move |s| s.tone.is_finite() && s.tone >= t)));
+                strategies.push((StrategyDef { family: "news-tone", scope: scope.clone(), horizon: h, params: format!("tone ≤ −{t:.0} (negative coverage)"), side: Side::BuyNo }, Box::new(move |s| s.tone.is_finite() && s.tone <= -t)));
+                strategies.push((StrategyDef { family: "news-tone", scope: scope.clone(), horizon: h, params: format!("tone rising ≥ +{t:.0} vs prior day"), side: Side::BuyYes }, Box::new(move |s| s.tone_delta.is_finite() && s.tone_delta >= t)));
+                strategies.push((StrategyDef { family: "news-tone", scope: scope.clone(), horizon: h, params: format!("tone falling ≤ −{t:.0} vs prior day"), side: Side::BuyNo }, Box::new(move |s| s.tone_delta.is_finite() && s.tone_delta <= -t)));
+            }
+            for &r in &[2.0f64, 4.0] {
+                for side in [Side::BuyYes, Side::BuyNo] {
+                    strategies.push((StrategyDef { family: "news-volume", scope: scope.clone(), horizon: h, params: format!("coverage ≥ {r:.0}× prior day"), side }, Box::new(move |s| s.news_ratio.is_finite() && s.news_ratio >= r)));
+                    strategies.push((StrategyDef { family: "news-volume", scope: scope.clone(), horizon: h, params: format!("coverage ≥ {r:.0}× & price moved up"), side }, Box::new(move |s| s.news_ratio.is_finite() && s.news_ratio >= r && s.ret[1].is_finite() && s.ret[1] > 0.0)));
+                }
+            }
+        }
+        for &h in &all_h {
+            for &x in &[0.02f64, 0.05, 0.10] {
+                for side in [Side::BuyYes, Side::BuyNo] {
+                    strategies.push((StrategyDef { family: "peer-drift", scope: scope.clone(), horizon: h, params: format!("peers up ≥ +{x:.2}, self flat"), side }, Box::new(move |s| s.peer_ret.is_finite() && s.peer_ret >= x && s.ret[1].is_finite() && s.ret[1].abs() < x / 2.0)));
+                    strategies.push((StrategyDef { family: "peer-drift", scope: scope.clone(), horizon: h, params: format!("peers down ≤ −{x:.2}, self flat"), side }, Box::new(move |s| s.peer_ret.is_finite() && s.peer_ret <= -x && s.ret[1].is_finite() && s.ret[1].abs() < x / 2.0)));
                 }
             }
         }

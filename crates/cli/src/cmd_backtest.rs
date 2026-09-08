@@ -144,6 +144,20 @@ pub fn run_spec(spec: &BacktestSpec, events: &[MarketEvent]) -> Result<BacktestO
         maker_touch_fill_prob: spec.maker_touch_fill_prob,
     });
     let (strat, params): (Box<dyn mb_core::Strategy>, serde_json::Value) = match spec.strategy.as_str() {
+        "flow-follow" | "flow-fade" => {
+            let mut cfg = mb_strategy::FlowConfig::default();
+            cfg.series = spec.series[0].clone();
+            cfg.follow = spec.strategy == "flow-follow";
+            if let Some(e) = spec.edge {
+                cfg.imbalance = e; // reuse the sweep dimension as the imbalance threshold
+            }
+            if let Some(t) = spec.min_tau_secs {
+                cfg.min_tau_secs = t;
+            }
+            cfg.stake = (0.02 * spec.bankroll).max(1.0);
+            let p = serde_json::json!({"imbalance": cfg.imbalance, "window_secs": cfg.window_secs, "follow": cfg.follow, "stake": cfg.stake});
+            (Box::new(mb_strategy::FlowStrategy::new(cfg)), p)
+        }
         "spread-maker" | "spread_maker" => {
             let mut cfg = if spec.config.exists() { SpreadMakerConfig::load(&spec.config)? } else { SpreadMakerConfig::default() };
             cfg.series = spec.series.clone();
@@ -227,7 +241,7 @@ pub fn write_outcome(dir: &Path, tag: &str, out: &BacktestOutcome, fills_csv: bo
 }
 
 pub async fn run(a: Args) -> Result<()> {
-    let ref_symbol = if a.strategy == "btc15m" {
+    let ref_symbol = if a.strategy == "btc15m" || a.strategy.starts_with("flow") {
         Some(if a.config.exists() { Btc15mConfig::load(&a.config)?.ref_symbol } else { Btc15mConfig::default().ref_symbol })
     } else {
         None
