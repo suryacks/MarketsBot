@@ -1,0 +1,52 @@
+# Gold 15-minute binaries (KXGOLD15M). Settlement: the close of the 1-minute Pyth GOLD candle at
+# the close time vs the same candle at open — a POINT close, not a 60-second average, so
+# settle_avg_secs = 0 and the model can price right up to the final seconds.
+#
+# Why this market: Kalshi streams the exact settlement index (Metal.Index.GOLD/USD) ~0.3 s behind
+# source, and gold's volatility is ~15x lower than BTC's, so the last seconds are near-deterministic.
+
+series = "KXGOLD15M"
+ref_symbol = "Metal.Index.GOLD/USD"
+
+min_edge = 0.03
+kelly_fraction = 0.25
+
+max_contracts_per_market = 200.0
+max_notional_per_market = 100.0
+max_order_qty = 50.0
+min_order_qty = 1.0
+
+# Point settlement: no averaging window, and we can trade to the last few seconds.
+settle_avg_secs = 0.0
+no_trade_last_secs = 3
+min_tau_secs = 3
+warmup_secs = 5
+
+vol_lambda = 0.97
+vol_sample_secs = 30.0
+# Don't price anything until the vol estimator has this many samples (~15 min of data at 30 s).
+vol_min_samples = 30
+vol_floor_annual = 0.05
+vol_cap_annual = 1.0
+vol_source = "realized"
+iv_lambda = 0.98
+
+max_entries_per_market = 3
+notional_frac_of_cash = 0.05
+
+requote_ms = 500
+min_touch_qty = 1.0
+allow_unwind = false
+
+# The index IS the settlement source, so no basis correction and no blending toward the market.
+auto_basis = false
+ref_basis = 0.0
+basis_lambda = 0.9
+market_blend = 0.0
+fair_min = 0.0
+fair_max = 1.0
+
+endgame = false
+endgame_stop_secs = 3.0
+maker = false
+maker_qty = 10.0

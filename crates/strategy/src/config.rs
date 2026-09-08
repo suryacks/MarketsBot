@@ -31,6 +31,9 @@ pub struct Btc15mConfig {
     pub vol_lambda: f64,
     /// Take one variance sample every N seconds (tick-frequency sampling is biased upward).
     pub vol_sample_secs: f64,
+    /// Minimum realized-vol samples before trading (a fresh estimator sits on the floor and is
+    /// wildly overconfident; without this the first trade in every market is made on noise).
+    pub vol_min_samples: u64,
     /// realized | implied | max | mean — where sigma comes from (implied = backed out of market prints).
     pub vol_source: String,
     /// EWMA weight for the implied-vol series.
@@ -90,6 +93,7 @@ impl Default for Btc15mConfig {
             warmup_secs: 5,
             vol_lambda: 0.97,
             vol_sample_secs: 60.0,
+            vol_min_samples: 30,
             vol_source: "realized".into(),
             iv_lambda: 0.98,
             max_entries_per_market: 3,

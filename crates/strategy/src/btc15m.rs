@@ -168,6 +168,10 @@ impl Btc15mStrategy {
         let Some((spot_ts, spot)) = self.spot else { return };
         self.stats.evaluations += 1;
 
+        if self.vol.realized.samples() < self.cfg.vol_min_samples {
+            self.stats.skipped_window += 1;
+            return; // volatility estimate not yet meaningful
+        }
         let secs_left = (a.close_ts_ms - now) / 1000;
         let tau = (a.close_ts_ms - now) as f64 / 1000.0;
         let endgame_now = self.cfg.endgame && tau < self.cfg.settle_avg_secs && tau >= self.cfg.endgame_stop_secs;
@@ -457,6 +461,8 @@ impl Strategy for Btc15mStrategy {
             "spot": self.spot.map(|(_, p)| p),
             "spot_ts_ms": self.spot.map(|(t, _)| t),
             "sigma_annual": self.vol.sigma_annual(),
+            "vol_samples": self.vol.realized.samples(),
+            "vol_min_samples": self.cfg.vol_min_samples,
             "implied_annual": self.vol.implied_annual(),
             "basis": self.effective_basis(),
             "basis_samples": self.basis.samples(),

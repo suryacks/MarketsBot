@@ -22,6 +22,8 @@ pub enum Channel {
     MarketLifecycle,
     /// CF Benchmarks index values (BRTI, ETHUSD_RTI, …) incl. the official running 60 s average.
     CfBenchmarks,
+    /// Pyth underlying values (Metal.Index.GOLD/USD, Metal.Index.SILVER/USD, Commodities.Index.PYTHOIL/USD, FX.*).
+    PythValue,
 }
 
 impl Channel {
@@ -33,17 +35,21 @@ impl Channel {
             Channel::Fill => "fill",
             Channel::MarketLifecycle => "market_lifecycle_v2",
             Channel::CfBenchmarks => "cfbenchmarks_value",
+            Channel::PythValue => "pyth_value",
         }
     }
 }
 
 /// Index ids to subscribe on the cfbenchmarks channel (set via `KalshiWs::with_indices`).
 pub const DEFAULT_INDICES: &[&str] = &["BRTI", "ETHUSD_RTI", "SOLUSD_RTI"];
+/// Pyth underlyings Kalshi settles its metals/energy/FX markets on.
+pub const DEFAULT_PYTH: &[&str] = &["Metal.Index.GOLD/USD", "Metal.Index.SILVER/USD", "Metal.XPT/USD", "Metal.XPD/USD", "Commodities.Index.PYTHOIL/USD"];
 
 pub struct KalshiWs {
     url: String,
     auth: Arc<KalshiAuth>,
     indices: Vec<String>,
+    pyth: Vec<String>,
 }
 
 impl KalshiWs {
@@ -52,11 +58,17 @@ impl KalshiWs {
             url: url.to_string(),
             auth: Arc::new(auth),
             indices: DEFAULT_INDICES.iter().map(|s| s.to_string()).collect(),
+            pyth: DEFAULT_PYTH.iter().map(|s| s.to_string()).collect(),
         }
     }
 
     pub fn with_indices(mut self, indices: Vec<String>) -> Self {
         self.indices = indices;
+        self
+    }
+
+    pub fn with_pyth(mut self, pyth: Vec<String>) -> Self {
+        self.pyth = pyth;
         self
     }
 
@@ -123,7 +135,12 @@ impl KalshiWs {
             sink.send(Message::Text(sub.to_string().into())).await?;
             info!(indices = ?self.indices, "kalshi ws subscribed to cfbenchmarks_value");
         }
-        let chans: Vec<&str> = channels.iter().filter(|c| **c != Channel::CfBenchmarks).map(|c| c.as_str()).collect();
+        if channels.contains(&Channel::PythValue) {
+            let sub = json!({ "id": 98, "cmd": "subscribe", "params": { "channels": ["pyth_value"], "underlying_tickers": self.pyth } });
+            sink.send(Message::Text(sub.to_string().into())).await?;
+            info!(underlyings = ?self.pyth, "kalshi ws subscribed to pyth_value");
+        }
+        let chans: Vec<&str> = channels.iter().filter(|c| !matches!(c, Channel::CfBenchmarks | Channel::PythValue)).map(|c| c.as_str()).collect();
         let mut cmd_id = 0u64;
         let mut subscribed: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut subscribe = |ts: &[String]| {
@@ -218,6 +235,22 @@ pub fn parse_message(v: &Value) -> Vec<MarketEvent> {
     };
     let ticker = m.get("market_ticker").and_then(Value::as_str).unwrap_or("").to_string();
     match typ {
+        "pyth_value" => {
+            let Some(sym) = m.get("underlying_ticker").and_then(Value::as_str) else { return vec![] };
+            let Some(px) = m.get("value_usd").and_then(fp).map(|f| f.to_f64()) else { return vec![] };
+            let ts = m
+                .get("source_ts_ms")
+                .and_then(Value::as_i64)
+                .or_else(|| m.get("received_at").and_then(Value::as_i64))
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            vec![MarketEvent::Ref(mb_core::RefPrice {
+                source: "pyth".into(),
+                symbol: sym.to_string(),
+                ts_ms: ts,
+                px,
+                avg_60s: None,
+            })]
+        }
         "cfbenchmarks_value" | "cfbenchmarks_value_5hz" => {
             let index = m.get("index_id").and_then(Value::as_str).unwrap_or("").to_string();
             // `data` is a JSON string: {"type":"value","id":"BRTI","time":ms,"value":"68000.12"}

@@ -62,6 +62,10 @@ pub struct FeedArgs {
     /// Poll NWS latest observations for the stations of the followed weather series (°F Ref events)
     #[arg(long)]
     pub nws_obs: bool,
+    /// Subscribe to Kalshi's Pyth feed (Metal.Index.GOLD/USD, SILVER, XPT, XPD, PYTHOIL): the exact
+    /// settlement index for the metals/energy 15-minute markets. Needs API keys.
+    #[arg(long)]
+    pub pyth_feed: bool,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -198,6 +202,9 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
             }
             if a.index_feed {
                 channels.push(Channel::CfBenchmarks);
+            }
+            if a.pyth_feed {
+                channels.push(Channel::PythValue);
             }
             tokio::spawn(async move {
                 if let Err(e) = ws.run_dynamic(&channels, wrx, txc).await {

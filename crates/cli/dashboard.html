@@ -4,263 +4,214 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MarketsBot</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  :root { --bg:#0b0d12; --panel:#141821; --panel2:#1a1f2b; --line:#252b38; --fg:#e8eaf0; --muted:#8a93a8; --pos:#38d39f; --neg:#ff6b6b; --acc:#7aa9ff; --warn:#f2b45b; }
-  * { box-sizing:border-box } html,body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
-  header { display:flex; align-items:center; gap:14px; padding:10px 20px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5 }
-  header h1 { font-size:15px; margin:0; letter-spacing:.4px } .muted { color:var(--muted) } .small { font-size:12px }
-  nav { display:flex; gap:4px; margin-left:12px } nav button { background:transparent; border:1px solid transparent; color:var(--muted); padding:6px 12px; border-radius:8px; cursor:pointer; font-size:13px } nav button.on { background:var(--panel2); color:var(--fg); border-color:var(--line) }
-  select,input { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:13px }
-  main { padding:16px 20px; display:grid; gap:14px; grid-template-columns: repeat(12, 1fr) } section { display:contents } section[hidden] { display:none }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; grid-column: span 12; min-width:0 }
-  .c3 { grid-column: span 3 } .c4 { grid-column: span 4 } .c6 { grid-column: span 6 } .c8 { grid-column: span 8 } .c9 { grid-column: span 9 }
-  @media (max-width: 1100px) { .c3,.c4 { grid-column: span 6 } .c6,.c8,.c9 { grid-column: span 12 } } @media (max-width: 700px) { .c3,.c4,.c6,.c8,.c9 { grid-column: span 12 } }
-  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.9px; color:var(--muted); margin:0 0 8px; display:flex; justify-content:space-between; align-items:center }
-  .kpi { font-size:26px; font-weight:600; font-variant-numeric: tabular-nums; letter-spacing:-.3px } .kpi small { font-size:12px; color:var(--muted); font-weight:400; margin-left:6px }
-  .pos { color:var(--pos) } .neg { color:var(--neg) } .warn { color:var(--warn) }
-  table { width:100%; border-collapse:collapse; font-variant-numeric: tabular-nums; font-size:12.5px } th,td { text-align:right; padding:5px 7px; border-bottom:1px solid var(--line); white-space:nowrap } th:first-child, td:first-child { text-align:left } th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.5px; cursor:pointer; user-select:none; position:sticky; top:0; background:var(--panel) } th.sorted::after { content:' ▾'; color:var(--acc) }
-  .scroll { overflow:auto; max-height:380px } .scroll.tall { max-height:560px }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; background:#232838; color:var(--muted); margin-left:6px } .pill.live { background:#143126; color:var(--pos) } .pill.dead { background:#3a1f1f; color:var(--neg) } .pill.real { background:#3b2b12; color:var(--warn) }
-  pre { margin:0; font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-all; color:#c9d1e3; max-height:520px; overflow:auto }
-  .verdict { padding:12px 14px; border-left:3px solid var(--warn); background:#1b1912; border-radius:8px; font-size:13.5px; line-height:1.55 } .verdict.ok { border-color:var(--pos); background:#12201a } .verdict.bad { border-color:var(--neg); background:#221515 }
-  .runs { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:10px } .run { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; cursor:pointer } .run.sel { border-color:var(--acc) } .run b { font-size:13px } .run .n { font-size:20px; font-weight:600; margin-top:4px }
-  .clickable { cursor:pointer } tr.clickable:hover { background:#1d2230 } canvas { width:100% !important } .h220 { height:220px !important } .h300 { height:300px !important }
-  .row { display:flex; gap:16px; flex-wrap:wrap; align-items:baseline } .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; font-size:13px } .grid2 b { font-variant-numeric: tabular-nums }
-  .bar { height:6px; background:#232838; border-radius:3px; overflow:hidden } .bar i { display:block; height:100%; background:var(--acc) }
-  .explain { font-size:12.5px; color:var(--muted); line-height:1.5 } .explain b { color:var(--fg) }
-  .pipe { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px } .stage { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 12px } .stage h3 { margin:0 0 4px; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted) } .stage .big { font-size:22px; font-weight:600 } .stage ul { margin:6px 0 0; padding-left:16px; font-size:12px; color:var(--muted) }
-  .v { display:inline-block; padding:2px 9px; border-radius:6px; font-size:11px; font-weight:600; letter-spacing:.4px } .v.PASS { background:#143126; color:var(--pos) } .v.FAIL { background:#3a1f1f; color:var(--neg) } .v.NOISE { background:#232838; color:var(--muted) } .v.INCONCLUSIVE, .v.NEEDS { background:#3b2b12; color:var(--warn) } .v.running { background:#1f2a44; color:var(--acc) } .v.error { background:#3a1f1f; color:var(--neg) }
-  @media (max-width: 900px) { .pipe { grid-template-columns: 1fr 1fr } }
+  :root { --bg:#0b0d12; --panel:#151922; --panel2:#1c212c; --line:#262c3a; --fg:#eceef4; --muted:#8b94a8; --pos:#3ad19b; --neg:#ff6b6b; --acc:#7aa9ff; --warn:#f5b64f; }
+  * { box-sizing:border-box } html,body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif }
+  header { display:flex; align-items:center; gap:14px; padding:14px 22px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5 }
+  header h1 { font-size:16px; margin:0; letter-spacing:.3px } .muted { color:var(--muted) } .small { font-size:13px } .tiny { font-size:12px }
+  nav { display:flex; gap:4px; margin-left:auto } nav button { background:transparent; border:1px solid transparent; color:var(--muted); padding:7px 13px; border-radius:8px; cursor:pointer; font-size:14px }
+  nav button.on { background:var(--panel2); color:var(--fg); border-color:var(--line) }
+  main { padding:20px 22px; max-width:1250px; margin:0 auto } section[hidden] { display:none }
+  .headline { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--warn); border-radius:12px; padding:18px 20px; margin-bottom:18px }
+  .headline h2 { margin:0 0 8px; font-size:20px; font-weight:600 } .headline p { margin:0; color:var(--muted); font-size:14.5px; line-height:1.6 }
+  .headline.ok { border-left-color:var(--pos) } .headline.bad { border-left-color:var(--neg) }
+  h3 { font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin:24px 0 10px; font-weight:600 }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:12px }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px }
+  .card .name { font-weight:600; font-size:15px; margin-bottom:2px } .card .what { color:var(--muted); font-size:13px; line-height:1.5; margin-bottom:10px }
+  .card .num { font-size:28px; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.5px }
+  .card .sub { color:var(--muted); font-size:13px; margin-top:2px } .card .verdict { margin-top:10px; font-size:13px; padding:7px 10px; border-radius:8px; background:var(--panel2); line-height:1.45 }
+  .pos { color:var(--pos) } .neg { color:var(--neg) } .warn { color:var(--warn) } .acc { color:var(--acc) }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; vertical-align:middle } .dot.live { background:var(--pos) } .dot.dead { background:#555c6e }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; font-size:13px } th,td { text-align:right; padding:7px 8px; border-bottom:1px solid var(--line); white-space:nowrap }
+  th:first-child, td:first-child { text-align:left } th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.6px }
+  .scroll { overflow:auto; max-height:420px; border:1px solid var(--line); border-radius:12px; background:var(--panel) } .scroll table th { position:sticky; top:0; background:var(--panel) }
+  .ruled { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:6px 16px }
+  .ruled li { padding:9px 0; border-bottom:1px solid var(--line); font-size:14px; list-style:none; margin:0 } .ruled li:last-child { border:0 }
+  .ruled ul { padding:0; margin:0 } .ruled b { color:var(--fg) } .ruled span { color:var(--muted) }
+  pre { margin:0; font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-all; color:#c6cee0; max-height:520px; overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px }
+  select { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:13px }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:6px }
+  .kpi { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px } .kpi .n { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums } .kpi .l { color:var(--muted); font-size:12px; margin-top:2px }
 </style>
 </head>
 <body>
 <header>
-  <h1>MarketsBot</h1>
-  <nav><button data-tab="lab" class="on">Strategy Lab</button><button data-tab="overview">Live Runs</button><button data-tab="trading">Trading</button><button data-tab="research">Research</button><button data-tab="data">Data &amp; Logs</button></nav>
-  <span style="flex:1"></span>
-  <span class="muted small" id="freshness"></span>
-  <span class="muted small" id="clock"></span>
+  <h1>MarketsBot</h1><span class="muted small" id="clock"></span>
+  <nav><button data-tab="now" class="on">What's happening</button><button data-tab="tests">Strategy tests</button><button data-tab="detail">Details</button><button data-tab="logs">Logs</button></nav>
 </header>
 <main>
-<section id="tab-lab">
-  <div class="card"><h2>The pipeline <span class="muted small">a strategy must pass each stage before the next; real money is capped at $100</span></h2>
-    <div class="pipe" id="pipe"></div>
-    <div class="explain" style="margin-top:10px"><b>PASS</b> = net PnL &gt; 0, t-stat ≥ 2, ≥ 100 markets on historical data. <b>FAIL</b> = ≥ 100 markets and no edge. <b>INCONCLUSIVE</b> = not enough markets yet. t-stat = average per-market PnL divided by its standard error: 2 means "probably not luck", 3 means "worth money". Everything runs on a $100 bankroll with position caps to match.</div></div>
-  <div class="card"><h2>Every algorithm family tried so far <span class="muted small" id="famMeta"></span></h2>
-    <div class="explain" style="margin-bottom:8px">One row per family of strategies. "evaluated" = variants with enough trades; "pass" = survived out-of-sample. A family with zero passes after hundreds of variants is evidence the information it uses is already priced in.</div>
-    <div class="scroll"><table id="famT"><thead><tr><th>family</th><th>information used</th><th>variants evaluated</th><th>pass OOS</th><th>fail OOS</th><th>inconclusive</th><th>status</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card"><h2>Experiments <span class="muted small" id="labMeta">reading reports/lab…</span></h2>
-    <div class="scroll tall"><table id="labT"><thead><tr><th>strategy</th><th>markets</th><th>what it does</th><th>stage</th><th>data</th><th>markets tested</th><th>fills</th><th>net PnL / $100</th><th>PnL per contract</th><th>win%</th><th>max DD</th><th>t</th><th>verdict</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card"><h2>Strategy universe <span class="muted small" id="uniMeta">no universe.json yet — run mbot build-dataset, then mbot universe</span></h2>
-    <div id="collect" class="explain" style="margin-bottom:10px"></div>
-    <div class="pipe" id="uniSummary"></div>
-    <div class="explain" style="margin:10px 0 8px">Thousands of parametrized strategies (price buckets, YES/NO bias, momentum, reversal, breakouts, drift-since-open, time-of-day filters) evaluated on identical fee-inclusive terms across every liquid series. <b>IS</b> = selected on the older half of the markets, <b>OOS</b> = judged on the newer half. Only <b>PASS</b> (t ≥ 2 in both, positive out of sample) is evidence; with this many candidates a few will pass by luck — the summary shows how many to expect.</div>
-    <div class="row small muted" style="margin-bottom:8px">family <select id="uniFam"><option value="">all</option></select> · verdict <select id="uniVerdict"><option value="">all</option><option>PASS</option><option>INCONCLUSIVE</option><option>FAIL OOS</option><option>NOISE</option></select> · scope contains <input id="uniScope" placeholder="e.g. KXHIGH or CAT:Sports" style="width:180px"> · min OOS n <input id="uniMinN" type="number" value="30" style="width:60px"></div>
-    <div class="scroll tall"><table id="uniT"><thead><tr><th>family</th><th>scope</th><th>before close</th><th>rule</th><th>side</th><th>n IS</th><th>EV IS</th><th>t IS</th><th>n OOS</th><th>EV OOS</th><th>t OOS</th><th>win OOS</th><th>$ OOS @$2/trade</th><th>verdict</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card"><h2>Rule candidates from the exchange-wide bias scan <span class="muted small" id="ruleMeta"></span></h2>
-    <div class="explain" style="margin-bottom:8px">Each row is a mechanical rule — "in series X, at H before close, when the price is in bucket B, buy YES/NO" — scored on every settled market of the last 30 days after Kalshi's taker fee. Only rows with n ≥ 100 are shown; t ≥ 3 is the bar to become an experiment.</div>
-    <div class="scroll"><table id="ruleT"><thead><tr><th>series</th><th>before close</th><th>price bucket</th><th>rule</th><th>n markets</th><th>EV per contract</th><th>t</th><th>verdict</th></tr></thead><tbody></tbody></table></div></div>
+
+<section id="tab-now">
+  <div class="headline" id="headline"><h2>loading…</h2><p></p></div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="n" id="kReal">$0.00</div><div class="l">real money at risk</div></div>
+    <div class="kpi"><div class="n" id="kRuns">–</div><div class="l">strategies live now (paper)</div></div>
+    <div class="kpi"><div class="n" id="kTested">–</div><div class="l">strategies tested on history</div></div>
+    <div class="kpi"><div class="n" id="kPass">–</div><div class="l">passed out-of-sample</div></div>
+  </div>
+
+  <h3>Running right now — simulated money, real prices</h3>
+  <div class="cards" id="runCards"></div>
+
+  <h3>Ruled out — tested and rejected</h3>
+  <div class="ruled"><ul id="ruledList"></ul></div>
 </section>
 
-<section id="tab-overview" hidden>
-  <div class="card"><h2>Where things stand <span class="muted" id="asof"></span></h2><div class="verdict" id="verdict">loading…</div></div>
-  <div class="card"><h2>Runs <span class="muted small">click to select · ● = updating now</span></h2><div class="runs" id="runs"></div></div>
-  <div class="card c3"><h2>Equity</h2><div class="kpi" id="equity">–</div><div class="muted small" id="equitySub"></div></div>
-  <div class="card c3"><h2>Realized (settled)</h2><div class="kpi" id="settledPnl">–</div><div class="muted small" id="settledSub"></div></div>
-  <div class="card c3"><h2>Open exposure · mark-to-mid</h2><div class="kpi" id="unreal">–</div><div class="muted small" id="unrealSub"></div></div>
-  <div class="card c3"><h2>Execution quality</h2><div class="kpi" id="fills">–</div><div class="muted small" id="queueSub"></div></div>
-  <div class="card c8"><h2>Cumulative realized PnL, per settled market</h2><canvas id="eqChart" class="h220"></canvas></div>
-  <div class="card c4"><h2>Model / strategy state</h2><div id="strat" class="grid2">–</div><div class="explain" id="stratExplain" style="margin-top:8px"></div></div>
-  <div class="card"><h2>Markets being priced or quoted <span class="muted small" id="mktCount"></span></h2><div class="scroll"><table id="mkts"><thead><tr><th>ticker</th><th>closes in</th><th>market bid</th><th>market ask</th><th>spread</th><th>our fair</th><th>edge</th><th>our bid</th><th>our ask</th><th>position</th><th>mtm</th></tr></thead><tbody></tbody></table></div></div>
+<section id="tab-tests" hidden>
+  <div class="headline" id="testHead"><h2>Strategy tests on historical data</h2><p>Every idea is scored on past markets before any money is involved. <b>PASS</b> means it made money on markets it was never tuned on. With tens of thousands of variants tried, a handful pass by luck alone — the "expected by luck" number below is the yardstick.</p></div>
+  <div class="kpis" id="uniKpis"></div>
+  <h3>Hand-built strategies</h3>
+  <div class="scroll"><table id="labT"><thead><tr><th>strategy</th><th>markets</th><th>what it does</th><th>tested on</th><th>net / $100</th><th>per contract</th><th>win%</th><th>t</th><th>verdict</th></tr></thead><tbody></tbody></table></div>
+  <h3>Automatic search — families of rules</h3>
+  <div class="scroll"><table id="famT"><thead><tr><th>family</th><th>information it uses</th><th>variants</th><th>passed</th><th>verdict</th></tr></thead><tbody></tbody></table></div>
+  <h3>Rules that passed out-of-sample</h3>
+  <div class="scroll"><table id="passT"><thead><tr><th>rule</th><th>markets</th><th>before close</th><th>trades (old half)</th><th>edge</th><th>trades (new half)</th><th>edge</th><th>t</th></tr></thead><tbody></tbody></table></div>
 </section>
 
-<section id="tab-trading" hidden>
-  <div class="card c6"><h2>Recent fills</h2><div class="scroll tall"><table id="fillsT"><thead><tr><th>time</th><th>ticker</th><th>side</th><th>px</th><th>qty</th><th>fee</th><th>role</th><th>tag</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card c6"><h2>Resting orders <span class="muted small">"ahead" = contracts queued in front of us</span></h2><div class="scroll tall"><table id="ordersT"><thead><tr><th>ticker</th><th>side</th><th>px</th><th>remaining</th><th>ahead</th><th>tag</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card"><h2>Settled markets in this run</h2><div class="scroll tall"><table id="settledT"><thead><tr><th>ticker</th><th>result</th><th>pnl</th><th>fees</th><th>fills</th><th>contracts</th><th>pnl / contract</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card"><h2>Risk (live runs)</h2><div id="risk" class="grid2 muted">no live run selected</div></div>
+<section id="tab-detail" hidden>
+  <h3>Run <select id="runSel"></select></h3>
+  <div class="kpis" id="detKpis"></div>
+  <h3>Markets it is watching</h3>
+  <div class="scroll"><table id="mkts"><thead><tr><th>market</th><th>closes in</th><th>market bid</th><th>market ask</th><th>our estimate</th><th>edge</th><th>position</th><th>value</th></tr></thead><tbody></tbody></table></div>
+  <h3>Recent trades</h3>
+  <div class="scroll"><table id="fillsT"><thead><tr><th>time</th><th>market</th><th>side</th><th>price</th><th>size</th><th>fee</th><th>type</th></tr></thead><tbody></tbody></table></div>
+  <h3>Finished markets</h3>
+  <div class="scroll"><table id="settledT"><thead><tr><th>market</th><th>result</th><th>profit</th><th>fees</th><th>trades</th></tr></thead><tbody></tbody></table></div>
+  <h3>Data collected</h3>
+  <div id="data" class="ruled"></div>
 </section>
 
-<section id="tab-research" hidden>
-  <div class="card"><h2>What the research says</h2><div class="explain" id="researchSummary">loading…</div></div>
-  <div class="card"><h2>Exchange-wide bias scan <span class="muted small" id="scanMeta"></span></h2>
-    <div class="row small muted" style="margin-bottom:8px">min markets <input id="scanMinN" type="number" value="30" style="width:70px"> · scope <select id="scanScope"><option value="series">per series</option><option value="cat">per category</option><option value="all">whole exchange</option></select> · <span>EV = expected PnL per $1 contract after Kalshi taker fee; t = EV / standard error; a real, repeatable edge needs t ≥ 3 and n ≥ 100</span></div>
-    <div class="scroll tall"><table id="scanT"><thead><tr><th data-k="series">series</th><th data-k="horizon_secs">before close</th><th data-k="bucket_lo">price bucket</th><th data-k="n">n</th><th data-k="avg_px">avg px</th><th data-k="yes_rate">resolved YES</th><th data-k="ev_buy_yes">EV buy YES</th><th data-k="ev_buy_no">EV buy NO</th><th data-k="t_stat" class="sorted">t</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card c6"><h2>How well each series is priced <span class="muted small">market Brier at sampled horizons; lower = harder to beat</span></h2><div class="scroll"><table id="seriesT"><thead><tr><th>series</th><th>category</th><th>title</th><th>markets</th><th>samples</th><th>brier</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card c6"><h2>Backtests <span class="muted small">click a row for its equity curve</span></h2><div class="scroll"><table id="reportsT"><thead><tr><th>when</th><th>series</th><th>window</th><th>exec</th><th>edge</th><th>blend</th><th>mkts</th><th>net</th><th>fees</th><th>win%</th><th>pnl/ct</th><th>maxDD</th></tr></thead><tbody></tbody></table></div><canvas id="btChart" class="h220" style="margin-top:10px"></canvas></div>
-</section>
-
-<section id="tab-data" hidden>
-  <div class="card c4"><h2>Recorded data</h2><div id="data" class="muted">–</div></div>
-  <div class="card c8"><h2>Logs <select id="logSel"></select> <span class="muted small">(last 200 lines, refreshes every 5 s)</span></h2><pre id="log"></pre></div>
+<section id="tab-logs" hidden>
+  <h3>Log <select id="logSel"></select></h3>
+  <pre id="log"></pre>
 </section>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-const fmt$ = v => (v==null||isNaN(v)) ? '–' : (v<0?'−':'+') + '$' + Math.abs(v).toFixed(2);
-const fmtp = v => v==null||isNaN(v) ? '–' : (+v).toFixed(3);
-const cls = v => v>0.000001?'pos':(v<-0.000001?'neg':'');
-const ago = ms => { if(!ms) return ''; const s=Math.max(0,(Date.now()-ms)/1000); return s<90?`${s.toFixed(0)}s ago`:s<5400?`${(s/60).toFixed(0)}m ago`:`${(s/3600).toFixed(1)}h ago`; };
-const until = ms => { const s=(ms-Date.now())/1000; if(!ms||isNaN(s)) return '–'; if(s<0) return 'closed'; return s<3600?`${(s/60).toFixed(0)}m`:s<86400?`${(s/3600).toFixed(1)}h`:`${(s/86400).toFixed(1)}d`; };
+const money = v => (v==null||isNaN(v)) ? '–' : (v<0?'−':'+') + '$' + Math.abs(v).toFixed(2);
+const cls = v => v>0.0001?'pos':(v<-0.0001?'neg':'');
+const ago = ms => { if(!ms) return ''; const s=Math.max(0,(Date.now()-ms)/1000); return s<90?`${s.toFixed(0)}s ago`:s<5400?`${(s/60).toFixed(0)} min ago`:`${(s/3600).toFixed(1)} h ago`; };
+const until = ms => { const s=(ms-Date.now())/1000; if(!ms||isNaN(s)) return '–'; if(s<0) return 'closed'; return s<3600?`${(s/60).toFixed(0)} min`:s<86400?`${(s/3600).toFixed(1)} h`:`${(s/86400).toFixed(1)} d`; };
 const hz = s => s<3600?`${s/60} min`:`${s/3600} h`;
-let runs=[], selectedId=null, eqChart=null, btChart=null, reportsCache=[], scan=null;
-
+let runs=[], lab=[], uni=null, selected=null;
 async function j(u){ const r=await fetch(u); return r.json(); }
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b)); document.querySelectorAll('main section').forEach(s=>s.hidden = s.id!=='tab-'+b.dataset.tab); });
 
-function verdict(r){
-  const el=$('#verdict'); el.className='verdict';
-  if(!r){ el.textContent='No runs found in data/state. Start one: mbot paper --strategy spread-maker --series KXHIGHNY …'; return; }
-  $('#risk').innerHTML='';
-  const n=r.settled_count||0, pnl=r.settled_pnl||0, w=r.settled_wins||0, live=(Date.now()-r.updated_ms)<15000;
-  const isReal=r.mode==='LIVE';
-  let txt=`<b>${r.run_id}</b> — ${r.strategy}, ${isReal?'REAL MONEY':'paper (simulated fills on real books)'}, ${live?'updating':'stopped/stale'}. `;
-  if(isReal){ txt+=`Cash $${r.cash.toFixed(2)} vs $${r.initial_cash.toFixed(2)} at start (${fmt$(r.cash-r.initial_cash)}), open exposure ${fmt$(r.unrealized)}. `; }
-  else { txt+=`${n} markets settled: realized ${fmt$(pnl)} (${w} won), open positions marked ${fmt$(r.unrealized)}. `; }
-  if(n<30 && !isReal){ txt+=`<br><b>Verdict: no verdict yet.</b> Per-market PnL noise is ~$50–70 at these sizes, so ~100 settled markets are needed before the total means anything. Nothing measured so far — BTC 15-min fair value, weather forecasts — has shown an edge over the market after fees; the open question is thin-book market-making, which this run is testing.`; }
-  else if(pnl>0 && w/n>0.5){ el.classList.add('ok'); txt+=`<br><b>Positive so far.</b> Check the per-market t-stat under Research before trusting it.`; }
-  else { el.classList.add('bad'); txt+=`<br><b>Not profitable over this sample.</b>`; }
-  el.innerHTML=txt;
+// plain-English description per strategy kind
+const WHAT = {
+  btc15m: 'Prices 15-minute crypto contracts from the live index and its volatility, then trades when the market disagrees.',
+  spread_maker: 'Quotes both sides in thin weather markets and tries to earn the spread.',
+  rule_trader: 'Trades the one pattern that survived testing: buy near-certain favourites hours before they close.',
+  weather_lock: 'Watches live weather stations. When the day\'s temperature or rainfall already decides a market, buys the certain side.',
+  flow: 'Follows or fades one-sided trading pressure.',
+};
+const NICE = { 'paper-gold15m':'Gold 15-minute', 'paper-btc15m-maker':'Bitcoin 15-minute (quoting)', 'paper-btc15m-endgame-only':'Bitcoin final minute', 'paper-eth15m-endgame-only':'Ethereum final minute', 'paper-weather-lock':'Weather already-decided', 'paper-weather-maker':'Weather market-making', 'paper-universe-rules':'Near-certain favourites' };
+const RULED_OUT = [
+  ['Crypto fair-value trading (buy/sell the touch)', 'Model matches the market; fees eat the difference. BTC, ETH, SOL — all negative over 10 days.'],
+  ['Order-flow imbalance', 'Predicts the next move slightly, but not enough to pay the spread. 12 variants, all negative.'],
+  ['Weather forecasts vs the market', 'Public forecasts are already priced in; the market\'s accuracy beat the model in every city.'],
+  ['Kalshi vs Polymarket lead-lag', 'No consistent lead either way; matched markets too illiquid to trade.'],
+  ['Economic-release reaction', 'Impossible here: the ladders close minutes before the data is published.'],
+  ['Bucket arbitrage', 'Prices across a full set of buckets almost never leave riskless profit — 4 tiny moments in 30 hours.'],
+  ['Momentum / reversal / breakouts', 'Look good on old data, reverse on new data. Classic overfitting.'],
+];
+
+function verdictFor(r){
+  const n=r.settled_count||0, pnl=r.settled_pnl||0;
+  if(r.mode==='LIVE') return ['warn', `Real money. ${money(r.cash-r.initial_cash)} so far.`];
+  if(n===0) return ['muted', 'No markets have finished yet — nothing to judge.'];
+  if(n<30) return ['muted', `Only ${n} finished. Need about 100 before the total means anything (single-market swings are large).`];
+  if(pnl>0) return ['pos', `Positive over ${n} markets. Check the t-value before trusting it.`];
+  return ['neg', `Losing over ${n} markets.`];
 }
 
-function renderRuns(){
-  $('#runs').innerHTML=runs.map(r=>{ const live=(Date.now()-r.updated_ms)<15000; const d=r.equity-r.initial_cash; return `<div class="run ${r.run_id===selectedId?'sel':''}" data-id="${r.run_id}"><b>${r.run_id}</b>${r.mode==='LIVE'?'<span class="pill real">REAL</span>':'<span class="pill">paper</span>'}<span class="pill ${live?'live':'dead'}">${live?'● live':'○ '+ago(r.updated_ms)}</span><div class="n ${cls(d)}">${fmt$(d)}</div><div class="muted small">${r.strategy} · ${r.settled_count} settled · ${r.n_fills} fills · open ${fmt$(r.unrealized)}</div></div>`; }).join('')||'<div class="muted">no runs</div>';
-  document.querySelectorAll('.run').forEach(el=>el.onclick=()=>{ selectedId=el.dataset.id; if(eqChart){eqChart.destroy();eqChart=null;} render(); });
+function renderNow(){
+  const paper = runs.filter(r=>r.mode!=='LIVE'), live = runs.filter(r=>r.mode==='LIVE');
+  const passed = uni ? uni.passed_oos : 0, tested = uni ? uni.evaluated : 0;
+  $('#kReal').textContent = live.length ? money(live.reduce((a,r)=>a+(r.cash-r.initial_cash),0)) : '$0.00';
+  $('#kRuns').textContent = paper.length; $('#kTested').textContent = (tested+lab.length).toLocaleString(); $('#kPass').textContent = passed;
+  const h=$('#headline');
+  const totalSettled = paper.reduce((a,r)=>a+(r.settled_count||0),0);
+  h.className='headline';
+  h.querySelector('h2').textContent = live.length ? 'Trading with real money' : 'Nothing is trading with real money yet';
+  h.querySelector('p').innerHTML = live.length
+    ? `${live.length} live run(s). Everything else is still being tested.`
+    : `<b>${paper.length} strategies are running on live prices with pretend money.</b> Between them ${totalSettled} markets have finished so far — a strategy needs about 100 finished markets before its result means anything. `
+      + `Out of <b>${(tested+lab.length).toLocaleString()}</b> strategies tested on past data, <b>${passed}</b> survived the out-of-sample check (about ${uni?uni.expected_false_pass.toFixed(0):'?'} would pass by luck alone), and they are all the same idea: buying near-certain favourites. `
+      + `The newest and most promising test is <b>Gold 15-minute</b>: Kalshi publishes the exact price that settles those contracts, and gold barely moves in the final seconds, so the outcome is close to known before the market catches up.`;
+
+  $('#runCards').innerHTML = runs.map(r=>{
+    const s=r.strategy_state||{}, kind=s.kind||'', live=(Date.now()-r.updated_ms)<20000;
+    const pnl=(r.equity||0)-(r.initial_cash||100), [vc,vt]=verdictFor(r);
+    const extra = kind==='weather_lock' ? `${(s.running_max||[]).length} stations watched · ${s.decided_moments||0} decided moments` :
+                  kind==='btc15m' ? `index ${s.spot?Number(s.spot).toFixed(2):'–'} · volatility ${(100*(s.sigma_annual||0)).toFixed(0)}%${s.vol_samples!=null?` · ${s.vol_samples}/${s.vol_min_samples} samples`:''}` :
+                  kind==='rule_trader' ? `${s.rules||0} rules · ${s.markets_watched||0} markets watched` :
+                  kind==='spread_maker' ? `${(s.markets||[]).length} markets quoted` : '';
+    return `<div class="card"><div class="name"><span class="dot ${live?'live':'dead'}"></span>${NICE[r.run_id]||r.run_id}</div>
+      <div class="what">${WHAT[kind]||''}</div>
+      <div class="num ${cls(pnl)}">${money(pnl)}</div>
+      <div class="sub">${r.settled_count||0} markets finished · ${r.n_fills||0} trades · ${extra}</div>
+      <div class="verdict ${vc}">${vt}</div></div>`;
+  }).join('') || '<div class="muted">No runs.</div>';
+
+  $('#ruledList').innerHTML = RULED_OUT.map(([a,b])=>`<li><b>${a}</b><br><span>${b}</span></li>`).join('');
 }
 
-function render(){
-  const r=runs.find(x=>x.run_id===selectedId)||runs[0]; if(r) selectedId=r.run_id;
-  renderRuns(); verdict(r); if(!r) return;
-  $('#asof').textContent=`updated ${ago(r.updated_ms)}`;
-  const eq=r.equity, d=eq-r.initial_cash, ret=d/r.initial_cash*100;
-  $('#equity').innerHTML=`<span class="${cls(d)}">$${eq.toFixed(2)}</span><small>${ret>=0?'+':''}${ret.toFixed(2)}% on $${r.initial_cash.toFixed(0)}</small>`;
-  $('#equitySub').textContent=`cash $${r.cash.toFixed(2)} · free $${r.free_cash.toFixed(2)} · started ${new Date(r.started_ms).toLocaleString()}`;
-  $('#settledPnl').innerHTML=`<span class="${cls(r.settled_pnl)}">${fmt$(r.settled_pnl)}</span>`;
-  $('#settledSub').textContent=`${r.settled_count} markets · ${r.settled_wins} won · ${r.settled_count?(100*r.settled_wins/r.settled_count).toFixed(0):0}% win rate`;
-  $('#unreal').innerHTML=`<span class="${cls(r.unrealized)}">${fmt$(r.unrealized)}</span>`;
-  $('#unrealSub').textContent=`${r.positions.filter(p=>p.yes_qty!==0).length} open positions · ${r.open_orders.length} resting orders`;
-  const q=r.queue||{}; const adverse=q.fills_through+q.fills_at_price>0? (100*q.fills_through/(q.fills_through+q.fills_at_price)).toFixed(0):'–';
-  $('#fills').innerHTML=`${r.n_fills}<small>fills · ${adverse}% run-through</small>`;
-  $('#queueSub').textContent=`${q.rested||0} quotes rested · avg ${Math.round(q.avg_ahead||0)} contracts ahead · ${q.reached_front||0} reached front · ${q.fills_at_price||0} filled at price · ${q.fills_through||0} filled by price running through`;
-  $('#freshness').textContent=(Date.now()-r.updated_ms)<15000?'● live':'○ stale';
+function renderTests(){
+  if(uni){
+    $('#uniKpis').innerHTML = `<div class="kpi"><div class="n">${uni.generated.toLocaleString()}</div><div class="l">rule variants generated</div></div>
+      <div class="kpi"><div class="n">${uni.evaluated.toLocaleString()}</div><div class="l">had enough trades to score</div></div>
+      <div class="kpi"><div class="n">${uni.passed_is}</div><div class="l">looked good on old data</div></div>
+      <div class="kpi"><div class="n ${uni.passed_oos>0?'pos':''}">${uni.passed_oos}</div><div class="l">still good on new data (≈${uni.expected_false_pass.toFixed(0)} by luck)</div></div>
+      <div class="kpi"><div class="n">${(uni.distinct_ideas||[]).length}</div><div class="l">genuinely different ideas</div></div>`;
+    $('#famT tbody').innerHTML = (uni.families||[]).slice().sort((a,b)=>b.pass-a.pass||b.evaluated-a.evaluated).map(f=>{
+      const st=f.evaluated===0?'<span class="muted">no data</span>':f.pass>0?`<span class="pos">${f.pass} passed</span>`:f.evaluated>=50?'<span class="neg">already priced in</span>':'<span class="warn">too few trades</span>';
+      return `<tr><td><b>${f.family}</b></td><td class="muted">${FAM_INFO[f.family]||''}</td><td>${f.evaluated}</td><td class="${f.pass?'pos':''}">${f.pass}</td><td>${st}</td></tr>`;
+    }).join('');
+    const pass=(uni.rows||[]).filter(r=>r.verdict==='PASS');
+    $('#passT tbody').innerHTML = pass.map(r=>`<tr><td>${r.side==='BuyYes'?'buy YES':'buy NO'} — ${r.params}</td><td>${r.scope}</td><td>${hz(r.horizon)}</td><td>${r.is.n}</td><td class="${cls(r.is.ev)}">${(r.is.ev>=0?'+':'')+(100*r.is.ev).toFixed(1)}¢</td><td>${r.oos.n}</td><td class="${cls(r.oos.ev)}">${(r.oos.ev>=0?'+':'')+(100*r.oos.ev).toFixed(1)}¢</td><td class="${r.oos.t>=2?'pos':''}">${r.oos.t.toFixed(1)}</td></tr>`).join('') || '<tr><td colspan=8 class="muted">none</td></tr>';
+  }
+  $('#labT tbody').innerHTML = lab.slice().sort((a,b)=>({PASS:0,'NEEDS BOOK DATA':1,INCONCLUSIVE:2,FAIL:3}[a.verdict]??4)-({PASS:0,'NEEDS BOOK DATA':1,INCONCLUSIVE:2,FAIL:3}[b.verdict]??4)).map(e=>{
+    const b=e.best||{}, v=e.status==='done'?(e.verdict||'INCONCLUSIVE'):e.stage||e.status;
+    const vc = v==='PASS'?'pos':v==='FAIL'?'neg':'warn';
+    return `<tr><td><b>${e.name}</b></td><td>${(e.series||[]).join(', ')}</td><td class="muted" style="white-space:normal;max-width:340px">${e.description||''}</td><td>${b.markets_traded??'–'} markets</td><td class="${cls(b.net_pnl)}">${b.net_pnl!=null?money(b.net_pnl):'–'}</td><td class="${cls(b.pnl_per_contract)}">${b.pnl_per_contract!=null?(100*b.pnl_per_contract).toFixed(1)+'¢':'–'}</td><td>${b.win_rate!=null?(100*b.win_rate).toFixed(0)+'%':'–'}</td><td>${b.t_stat!=null?b.t_stat.toFixed(1):'–'}</td><td class="${vc}">${v}</td></tr>`;
+  }).join('') || '<tr><td colspan=9 class="muted">none yet</td></tr>';
+}
+const FAM_INFO={'price-bucket':'the price alone','side-bias':'nothing — always one side','momentum':'recent price moves, same direction','reversal':'recent price moves, opposite direction','breakout':'new highs and lows','drift-since-open':'total move since the market opened','time-filter':'time of day and day of week','ladder':'prices of neighbouring strikes','bucket-sum':'whether a full set of buckets adds to $1','volume-surge':'sudden trading volume','spread-regime':'how wide the bid-ask is','market-age':'how far through its life the market is','path-vol':'how choppy the price has been','interaction':'combinations of the above','news-tone':'tone of news coverage (GDELT)','news-volume':'how much news coverage','peer-drift':'moves in similar markets'};
 
-  const pts=[]; let c=0; (r.settled||[]).forEach((s,i)=>{ c+=s.pnl; pts.push({x:i+1,y:+c.toFixed(2)}); });
-  drawLine('eqChart', eqChart, ch=>eqChart=ch, pts, 'settled PnL', 'settled markets');
-
-  const s=r.strategy_state||{}; const st=$('#strat'); const ex=$('#stratExplain');
-  if(s.kind==='btc15m'){ st.innerHTML=`<span class="muted">spot</span><b>${s.spot?s.spot.toFixed(2):'–'}</b><span class="muted">realized vol</span><b>${(100*(s.sigma_annual||0)).toFixed(1)}% ann.</b><span class="muted">basis (BRTI−spot)</span><b>$${(s.basis||0).toFixed(2)} <span class="muted">(${s.basis_samples||0})</span></b><span class="muted">blend to market</span><b>${s.market_blend}</b><span class="muted">edge required</span><b>${s.min_edge}</b><span class="muted">mode</span><b>${s.mode}</b><span class="muted">signals / orders</span><b>${s.stats?.signals||0} / ${s.stats?.orders||0}</b>`; ex.innerHTML=`Prices each 15-minute BTC binary as a digital option on the live Coinbase price, then ${s.mode==='maker'?'rests quotes around fair value (zero maker fee)':'takes the touch when it disagrees with the market'}. <b>Finding:</b> at parity with the market over 10 days; taker cannot pay fees; maker sits behind ~3k contracts.`; }
-  else if(s.kind==='spread_maker'){ st.innerHTML=`<span class="muted">half spread</span><b>${s.half_spread}</b><span class="muted">quote size</span><b>${s.quote_qty}</b><span class="muted">max inventory</span><b>${s.max_inventory}</b><span class="muted">orders sent</span><b>${s.orders}</b><span class="muted">series</span><b class="small">${(s.series||[]).join(', ')}</b>`; ex.innerHTML=`Model-free market making: quotes mid ± ${s.half_spread} in thin daily-weather books, skewing quotes against inventory. Earns the spread if retail flow is uninformed; loses if price runs through the quotes (adverse selection). Watch <b>% run-through</b> and realized PnL per contract.`; }
-  else { st.textContent='–'; ex.textContent=''; }
-
+function renderDetail(){
+  const sel=$('#runSel'), prev=sel.value;
+  sel.innerHTML = runs.map(r=>`<option value="${r.run_id}">${NICE[r.run_id]||r.run_id}</option>`).join('');
+  if(runs.find(r=>r.run_id===prev)) sel.value=prev; else if(runs[0]) sel.value=runs[0].run_id;
+  const r = runs.find(x=>x.run_id===sel.value); if(!r) return;
+  const s=r.strategy_state||{}, q=r.queue||{};
+  $('#detKpis').innerHTML = `<div class="kpi"><div class="n ${cls(r.equity-r.initial_cash)}">${money(r.equity-r.initial_cash)}</div><div class="l">profit (pretend $${r.initial_cash.toFixed(0)})</div></div>
+    <div class="kpi"><div class="n">${r.settled_count}</div><div class="l">markets finished</div></div>
+    <div class="kpi"><div class="n">${r.n_fills}</div><div class="l">trades made</div></div>
+    <div class="kpi"><div class="n">${r.open_orders.length}</div><div class="l">orders resting</div></div>
+    <div class="kpi"><div class="n">${Math.round(q.avg_ahead||0)}</div><div class="l">contracts ahead in queue</div></div>`;
   const posBy={}; r.positions.forEach(p=>posBy[p.ticker]=p);
-  const rows=(s.markets||[]).map(m=>{ const b=r.books[m.ticker]||{}; const bid=b.bid?b.bid[0]:null, ask=b.ask?b.ask[0]:null; const fair=m.fair; let edge=null; if(fair!=null&&bid!=null&&ask!=null) edge=Math.max(fair-ask, bid-fair); const p=posBy[m.ticker]||{}; return {m,b,bid,ask,fair,edge,p}; }).sort((a,b)=>(a.m.close_ts_ms||0)-(b.m.close_ts_ms||0));
-  $('#mktCount').textContent=`${rows.length} markets`;
-  $('#mkts tbody').innerHTML=rows.map(({m,b,bid,ask,fair,edge,p})=>`<tr><td>${m.ticker}</td><td>${until(m.close_ts_ms)}</td><td>${fmtp(bid)}${b.bid?`<span class="muted"> ×${Math.round(b.bid[1])}</span>`:''}</td><td>${fmtp(ask)}${b.ask?`<span class="muted"> ×${Math.round(b.ask[1])}</span>`:''}</td><td>${bid!=null&&ask!=null?(ask-bid).toFixed(3):'–'}</td><td>${fmtp(fair)}</td><td class="${edge>0?'pos':''}">${edge==null?'–':(edge>=0?'+':'')+edge.toFixed(3)}</td><td>${fmtp(m.bid_quote)}</td><td>${fmtp(m.ask_quote)}</td><td class="${cls(p.yes_qty)}">${p.yes_qty?p.yes_qty.toFixed(0):''}</td><td class="${cls(p.mtm)}">${p.mtm!=null?fmt$(p.mtm):''}</td></tr>`).join('')||'<tr><td colspan=11 class="muted">no markets tracked yet</td></tr>';
+  const rows=(s.markets||[]).map(m=>{ const b=r.books[m.ticker]||{}, bid=b.bid?b.bid[0]:null, ask=b.ask?b.ask[0]:null, fair=m.fair; let edge=null; if(fair!=null&&bid!=null&&ask!=null) edge=Math.max(fair-ask,bid-fair); return {m,bid,ask,fair,edge,p:posBy[m.ticker]||{}}; }).sort((a,b)=>(a.m.close_ts_ms||0)-(b.m.close_ts_ms||0)).slice(0,200);
+  $('#mkts tbody').innerHTML = rows.map(({m,bid,ask,fair,edge,p})=>`<tr><td>${m.ticker}</td><td>${until(m.close_ts_ms)}</td><td>${bid!=null?(100*bid).toFixed(0)+'¢':'–'}</td><td>${ask!=null?(100*ask).toFixed(0)+'¢':'–'}</td><td>${fair!=null?(100*fair).toFixed(0)+'¢':'–'}</td><td class="${edge>0?'pos':''}">${edge!=null?(edge>=0?'+':'')+(100*edge).toFixed(0)+'¢':'–'}</td><td class="${cls(p.yes_qty)}">${p.yes_qty?p.yes_qty.toFixed(0):''}</td><td class="${cls(p.mtm)}">${p.mtm!=null?money(p.mtm):''}</td></tr>`).join('') || '<tr><td colspan=8 class="muted">none</td></tr>';
+  $('#fillsT tbody').innerHTML = (r.fills||[]).slice(0,120).map(f=>`<tr><td>${new Date(f.ts_ms).toLocaleTimeString()}</td><td>${f.ticker}</td><td class="${f.action==='Buy'?'pos':'neg'}">${f.action==='Buy'?'bought YES':'bought NO'}</td><td>${(100*f.yes_px).toFixed(0)}¢</td><td>${f.qty.toFixed(0)}</td><td>$${f.fee.toFixed(2)}</td><td class="muted">${f.is_maker?'quoted':'took'}</td></tr>`).join('') || '<tr><td colspan=7 class="muted">no trades yet</td></tr>';
+  $('#settledT tbody').innerHTML = (r.settled||[]).slice().reverse().map(x=>`<tr><td>${x.ticker}</td><td>${x.result}</td><td class="${cls(x.pnl)}">${money(x.pnl)}</td><td>$${x.fees.toFixed(2)}</td><td>${x.n_fills}</td></tr>`).join('') || '<tr><td colspan=5 class="muted">none finished yet</td></tr>';
+}
+$('#runSel')?.addEventListener('change', renderDetail);
 
-  $('#fillsT tbody').innerHTML=(r.fills||[]).slice(0,150).map(f=>`<tr><td>${new Date(f.ts_ms).toLocaleTimeString()}</td><td>${f.ticker}</td><td class="${f.action==='Buy'?'pos':'neg'}">${f.action==='Buy'?'buy YES':'sell YES'}</td><td>${f.yes_px.toFixed(3)}</td><td>${f.qty.toFixed(2)}</td><td>${f.fee.toFixed(2)}</td><td>${f.is_maker?'maker':'taker'}</td><td class="muted">${f.tag}</td></tr>`).join('')||'<tr><td colspan=8 class="muted">no fills yet</td></tr>';
-  $('#ordersT tbody').innerHTML=(r.open_orders||[]).map(o=>`<tr><td>${o.ticker}</td><td class="${o.action==='Buy'?'pos':'neg'}">${o.action==='Buy'?'bid':'ask'}</td><td>${o.yes_px.toFixed(3)}</td><td>${o.remaining.toFixed(1)}</td><td>${Math.round(o.ahead)}</td><td class="muted">${o.tag}</td></tr>`).join('')||'<tr><td colspan=6 class="muted">none</td></tr>';
-  $('#settledT tbody').innerHTML=(r.settled||[]).slice().reverse().map(s=>`<tr><td>${s.ticker}</td><td>${s.result}</td><td class="${cls(s.pnl)}">${fmt$(s.pnl)}</td><td>${s.fees.toFixed(2)}</td><td>${s.n_fills}</td><td>${s.volume.toFixed(0)}</td><td class="${cls(s.pnl)}">${s.volume?(s.pnl/s.volume).toFixed(4):'–'}</td></tr>`).join('')||'<tr><td colspan=7 class="muted">nothing settled yet</td></tr>';
-  const rk=r.risk; $('#risk').innerHTML= rk ? `<span class="muted">at risk / cap</span><b>$${rk.at_risk.toFixed(2)} / $${rk.max_notional}</b><span class="muted">kill switch</span><b>${rk.halted?'<span class="neg">HALTED</span>':'armed at −$'+rk.max_loss}</b><span class="muted">orders rejected by limits</span><b>${rk.rejected}</b><span class="muted">dry run</span><b>${rk.dry_run}</b>` : '<span class="muted">paper run — no real risk</span>';
+async function loadAll(){
+  runs = (await j('/api/runs')).filter(r=>r.run_id);
+  lab = await j('/api/lab');
+  renderNow(); renderTests(); renderDetail();
 }
-
-function drawLine(id, cur, set, pts, label, xlabel){
-  const ctx=document.getElementById(id);
-  if(cur){ cur.data.datasets[0].data=pts; cur.update('none'); return; }
-  set(new Chart(ctx,{type:'line',data:{datasets:[{label,data:pts,borderColor:'#7aa9ff',backgroundColor:'rgba(122,169,255,.14)',fill:true,pointRadius:0,tension:.15}]},
-    options:{animation:false,parsing:false,maintainAspectRatio:false,scales:{x:{type:'linear',ticks:{color:'#8a93a8'},grid:{color:'#252b38'},title:{display:true,text:xlabel||'',color:'#8a93a8'}},y:{ticks:{color:'#8a93a8',callback:v=>'$'+v},grid:{color:'#252b38'}}},plugins:{legend:{display:false}}}}));
-}
-
-async function loadRuns(){ runs=await j('/api/runs'); runs=runs.filter(r=>r.run_id); render(); renderPipe(); }
-
-let lab=[];
-function renderPipe(){
-  const done=lab.filter(e=>e.status==='done'), running=lab.filter(e=>e.status==='running');
-  const pass=done.filter(e=>e.verdict==='PASS'), fail=done.filter(e=>e.verdict==='FAIL'), inc=done.filter(e=>e.verdict==='INCONCLUSIVE');
-  const paper=runs.filter(r=>r.mode!=='LIVE'), live=runs.filter(r=>r.mode==='LIVE');
-  const rules=(scan?.rows||[]).filter(r=>r.n>=100&&r.series!=='ALL'&&!r.series.startsWith('CAT:'));
-  const ruleCands=rules.filter(r=>r.t_stat>=3);
-  $('#pipe').innerHTML=`
-    <div class="stage"><h3>1 · Backtest on history</h3><div class="big">${lab.length+rules.length}<span class="muted small"> experiments</span></div><ul><li class="pos">${pass.length+ruleCands.length} pass</li><li class="neg">${fail.length+(rules.length-ruleCands.length)} fail</li><li class="warn">${inc.length} inconclusive</li><li>${running.length} running</li></ul></div>
-    <div class="stage"><h3>2 · Paper on live books</h3><div class="big">${paper.length}<span class="muted small"> running</span></div><ul>${paper.map(r=>`<li>${r.run_id}: <span class="${cls(r.equity-r.initial_cash)}">${fmt$(r.equity-r.initial_cash)}</span> · ${r.settled_count} settled</li>`).join('')||'<li>none</li>'}</ul></div>
-    <div class="stage"><h3>3 · Live, $100 cap</h3><div class="big">${live.length}<span class="muted small"> running</span></div><ul>${live.map(r=>`<li>${r.run_id}: <span class="${cls(r.cash-r.initial_cash)}">${fmt$(r.cash-r.initial_cash)}</span></li>`).join('')||'<li>nothing has earned it yet</li>'}</ul></div>
-    <div class="stage"><h3>Gate to real money</h3><div class="big">${pass.length+ruleCands.length>0?'<span class="pos">open</span>':'<span class="neg">closed</span>'}</div><ul><li>needs a PASS on history</li><li>then positive paper PnL, ≥ 100 settled markets, t ≥ 2</li><li>then <code>mbot live … --max-notional 100</code></li></ul></div>`;
-}
-async function loadLab(){
-  lab=await j('/api/lab');
-  const rank=e=>e.status==='running'?-1:({PASS:0,'NEEDS BOOK DATA':1,INCONCLUSIVE:2,FAIL:3}[e.verdict]??4);
-  const rows=lab.slice().sort((a,b)=>rank(a)-rank(b));
-  $('#labMeta').textContent=`${lab.length} experiments · ${lab.filter(e=>e.status==='running').length} running · updated ${ago(Math.max(0,...lab.map(e=>e.updated_ms||0)))}`;
-  $('#labT tbody').innerHTML=rows.map(e=>{ const b=e.best||{}; const v=e.status==='done'?(e.verdict||'INCONCLUSIVE'):e.status; const sw=(e.sweeps||[]).length>1?`<div class="muted small">best of ${e.sweeps.length} edge settings (${e.sweeps.map(s=>s.edge).join(', ')})</div>`:''; return `<tr><td><b>${e.name}</b>${sw}</td><td>${(e.series||[]).join(', ')}</td><td class="muted" style="white-space:normal;max-width:320px">${e.description||''}</td><td>${e.status==='running'?`<span class="v running">${e.stage}…</span>`:'backtest'}</td><td class="muted">${e.mode||''} · ${e.days}d${e.events?` · ${(e.events/1e6).toFixed(1)}M events`:''}</td><td>${b.markets_traded??'–'}${b.markets_seen?`<span class="muted"> / ${b.markets_seen}</span>`:''}</td><td>${b.n_fills??'–'}</td><td class="${cls(b.net_pnl)}">${b.net_pnl!=null?fmt$(b.net_pnl):'–'}</td><td class="${cls(b.pnl_per_contract)}">${b.pnl_per_contract!=null?b.pnl_per_contract.toFixed(4):'–'}</td><td>${b.win_rate!=null?(100*b.win_rate).toFixed(0)+'%':'–'}</td><td>${b.max_drawdown!=null?'$'+b.max_drawdown.toFixed(0):'–'}</td><td class="${b.t_stat>=2?'pos':b.t_stat<=-2?'neg':''}">${b.t_stat!=null?b.t_stat.toFixed(2):'–'}</td><td><span class="v ${v.split(' ')[0]}">${v}</span>${e.note?`<div class="muted small" style="white-space:normal;max-width:260px">${e.note}</div>`:''}${e.error?`<div class="neg small">${e.error}</div>`:''}</td></tr>`; }).join('')||'<tr><td colspan=13 class="muted">no experiments yet — run: mbot lab</td></tr>';
-  renderRules(); renderPipe();
-}
-let uni=null;
-async function loadProgress(){
-  try { const p=await j('/api/progress'); const el=$('#collect'); if(!p||!p.phase){ el.textContent=''; return; }
-    const live=(Date.now()-p.updated_ms)<180000; const pct=p.target_series?Math.min(100,100*p.series_written/p.target_series):0;
-    el.innerHTML=`<b>Data collection ${p.phase==='complete'?'complete':(live?'running':'stalled')}</b> — ${p.series_written} series with full price paths on disk${p.target_series?` of ${p.target_series} targeted`:''}, ${p.markets_fetched} markets fetched, ${p.series_scanned}/${p.series_candidates} candidate series scanned${p.last_series?` · latest: ${p.last_series} (${p.last_title||''})`:''} · ${p.authenticated?'authenticated (fast tier)':'public tier'} · updated ${ago(p.updated_ms)}<div class="bar" style="margin-top:6px"><i style="width:${pct}%"></i></div><span class="muted small">The universe below is re-evaluated every few minutes on whatever has arrived, so its numbers climb as data lands.</span>`;
-  } catch(e){}
-}
-async function loadUniverse(){
-  try { const r=await fetch('/api/report?name=universe.json'); uni=await r.json(); } catch(e){ uni=null; }
-  if(!uni||!uni.rows){ return; }
-  const fam=$('#uniFam'); const cur=fam.value; fam.innerHTML='<option value="">all</option>'+(uni.families||[]).map(f=>`<option value="${f.family}">${f.family} (${f.pass} pass / ${f.evaluated})</option>`).join(''); fam.value=cur;
-  renderUniverse();
-}
-const FAM_INFO={'price-bucket':'price level alone (favorite/longshot calibration)','side-bias':'nothing but the side (YES-bias)','momentum':'recent price path, same direction','reversal':'recent price path, opposite direction','breakout':'new high / new low of the path','drift-since-open':'cumulative move since open (informed flow)','time-filter':'time of day / weekend × price level','ladder':'adjacent strikes in the same event (relative value)','bucket-sum':'Σ of bucket prices in the event vs $1','volume-surge':'trade volume spike × direction','spread-regime':'bid–ask width × price level','market-age':'how far through its life the market is','path-vol':'calm vs choppy price path','interaction':'momentum × level, drift × volume','news-tone':'GDELT news sentiment (tone) in prior 24 h','news-volume':'GDELT article volume surge','peer-drift':'moves of sibling markets in the same category'};
-function renderFamilies(){
-  if(!uni||!uni.families) return;
-  const fams=uni.families.slice().sort((a,b)=>b.pass-a.pass||b.evaluated-a.evaluated);
-  $('#famMeta').textContent=`${fams.length} families · ${uni.generated} variants · last run ${ago(uni.created_ms)}`;
-  $('#famT tbody').innerHTML=fams.map(f=>{ const st=f.evaluated===0?'no data yet':f.pass>0?`<span class="v PASS">${f.pass} PASS</span>`:f.evaluated>=50?'<span class="v FAIL">priced in</span>':'<span class="v INCONCLUSIVE">thin</span>'; return `<tr><td><b>${f.family}</b></td><td class="muted">${FAM_INFO[f.family]||''}</td><td>${f.evaluated}</td><td class="${f.pass?'pos':''}">${f.pass}</td><td>${f.fail_oos}</td><td>${f.inconclusive}</td><td>${st}</td></tr>`; }).join('');
-}
-function renderUniverse(){
-  if(!uni||!uni.rows) return;
-  renderFamilies();
-  $('#uniMeta').textContent=`${uni.generated} strategies generated · ${uni.evaluated} with enough trades · ${uni.markets} markets, ${uni.series} series, ${uni.samples} samples · ${new Date(uni.created_ms).toLocaleString()}`;
-  const ideas=uni.distinct_ideas||[];
-  $('#uniSummary').innerHTML=`<div class="stage"><h3>generated</h3><div class="big">${uni.generated}</div><ul><li>${(uni.families||[]).length} families</li></ul></div><div class="stage"><h3>looked good in-sample</h3><div class="big">${uni.passed_is}</div><ul><li>t ≥ 2 on the older half</li></ul></div><div class="stage"><h3>passed out-of-sample</h3><div class="big ${uni.passed_oos>0?'pos':''}">${uni.passed_oos}</div><ul><li>≈ ${uni.expected_false_pass.toFixed(1)} expected by pure luck</li><li><b>${ideas.length} distinct idea${ideas.length===1?'':'s'}</b> (variants across scopes/horizons collapsed)</li></ul></div><div class="stage"><h3>distinct ideas that passed</h3><ul>${ideas.slice(0,8).map(i=>`<li>${i.idea} <span class="muted">· ${i.variants} variant${i.variants===1?'':'s'}, best t ${i.best_oos_t.toFixed(1)}</span></li>`).join('')||'<li>none yet</li>'}</ul></div>`;
-  const f=$('#uniFam').value, v=$('#uniVerdict').value, sc=($('#uniScope').value||'').toLowerCase(), mn=+$('#uniMinN').value||0;
-  const rows=uni.rows.filter(r=>(!f||r.family===f)&&(!v||r.verdict===v)&&(!sc||r.scope.toLowerCase().includes(sc))&&r.oos.n>=mn).slice(0,500);
-  $('#uniT tbody').innerHTML=rows.map(r=>`<tr><td>${r.family}</td><td>${r.scope}</td><td>${hz(r.horizon)}</td><td class="muted">${r.params}</td><td>${r.side==='BuyYes'?'buy YES':'buy NO'}</td><td>${r.is.n}</td><td class="${cls(r.is.ev)}">${(r.is.ev>=0?'+':'')+r.is.ev.toFixed(3)}</td><td>${r.is.t.toFixed(2)}</td><td>${r.oos.n}</td><td class="${cls(r.oos.ev)}">${(r.oos.ev>=0?'+':'')+r.oos.ev.toFixed(3)}</td><td class="${r.oos.t>=2?'pos':r.oos.t<=-2?'neg':''}">${r.oos.t.toFixed(2)}</td><td>${(100*r.oos.win).toFixed(0)}%</td><td class="${cls(r.oos.pnl_stake)}">${fmt$(r.oos.pnl_stake)}</td><td><span class="v ${r.verdict.split(' ')[0]}">${r.verdict}</span></td></tr>`).join('')||'<tr><td colspan=14 class="muted">no rows match</td></tr>';
-}
-['uniFam','uniVerdict','uniScope','uniMinN'].forEach(id=>{ const el=document.getElementById(id); el.oninput=renderUniverse; el.onchange=renderUniverse; });
-function renderRules(){
-  const rules=(scan?.rows||[]).filter(r=>r.n>=100&&r.series!=='ALL'&&!r.series.startsWith('CAT:')).sort((a,b)=>b.t_stat-a.t_stat);
-  $('#ruleMeta').textContent= scan ? `${rules.length} rules with n ≥ 100 · scan of ${scan.days} days, ${scan.n_samples} samples` : 'no scan yet (mbot scan-bias is running or has not been run)';
-  $('#ruleT tbody').innerHTML=rules.slice(0,60).map(r=>{ const buy=r.ev_buy_yes>=r.ev_buy_no; const ev=buy?r.ev_buy_yes:r.ev_buy_no; const v=r.t_stat>=3&&ev>0?'PASS':(ev<=0||r.t_stat<1?'FAIL':'INCONCLUSIVE'); return `<tr><td>${r.series}</td><td>${hz(r.horizon_secs)}</td><td>${r.bucket_lo.toFixed(2)}–${r.bucket_hi.toFixed(2)}</td><td>${buy?'buy YES':'buy NO'} at ${r.avg_px.toFixed(3)} → resolves YES ${(100*r.yes_rate).toFixed(0)}%</td><td>${r.n}</td><td class="${cls(ev)}">${(ev>=0?'+':'')+ev.toFixed(3)}</td><td class="${r.t_stat>=3?'pos':r.t_stat>=2?'warn':''}">${r.t_stat.toFixed(2)}</td><td><span class="v ${v}">${v}</span></td></tr>`; }).join('')||'<tr><td colspan=8 class="muted">waiting for the bias scan</td></tr>';
-}
-
-let scanSort={k:'t_stat',dir:-1};
-function renderScan(){
-  if(!scan){ $('#scanMeta').textContent='no scan yet — run: mbot scan-bias'; return; }
-  const minN=+$('#scanMinN').value||0, scope=$('#scanScope').value;
-  let rows=(scan.rows||[]).filter(r=>r.n>=minN).filter(r=> scope==='all'?r.series==='ALL': scope==='cat'?r.series.startsWith('CAT:'):(r.series!=='ALL'&&!r.series.startsWith('CAT:')));
-  rows.sort((a,b)=>(a[scanSort.k]>b[scanSort.k]?1:-1)*scanSort.dir);
-  $('#scanMeta').textContent=`${scan.days} days · ${scan.n_samples} samples · ${new Date(scan.created_ms).toLocaleString()}`;
-  $('#scanT tbody').innerHTML=rows.slice(0,400).map(r=>{ const best=Math.max(r.ev_buy_yes,r.ev_buy_no); const strong=r.t_stat>=3&&r.n>=100; return `<tr class="${strong?'':''}"><td>${r.series.replace('CAT:','')}${strong?'<span class="pill live">candidate</span>':''}</td><td>${hz(r.horizon_secs)}</td><td>${r.bucket_lo.toFixed(2)}–${r.bucket_hi.toFixed(2)}</td><td>${r.n}</td><td>${r.avg_px.toFixed(3)}</td><td>${(100*r.yes_rate).toFixed(1)}%</td><td class="${cls(r.ev_buy_yes)}">${(r.ev_buy_yes>=0?'+':'')+r.ev_buy_yes.toFixed(3)}</td><td class="${cls(r.ev_buy_no)}">${(r.ev_buy_no>=0?'+':'')+r.ev_buy_no.toFixed(3)}</td><td class="${r.t_stat>=3?'pos':r.t_stat>=2?'warn':''}">${r.t_stat.toFixed(2)}</td></tr>`; }).join('')||'<tr><td colspan=9 class="muted">no rows match</td></tr>';
-  $('#seriesT tbody').innerHTML=(scan.series||[]).slice().sort((a,b)=>a.brier_market-b.brier_market).map(s=>`<tr><td>${s.series}</td><td class="muted">${s.category}</td><td class="muted">${s.title}</td><td>${s.markets}</td><td>${s.samples}</td><td>${isNaN(s.brier_market)?'–':s.brier_market.toFixed(4)}</td></tr>`).join('');
-  const cands=rows.filter(r=>r.t_stat>=3&&r.n>=100&&r.series!=='ALL'&&!r.series.startsWith('CAT:'));
-  $('#researchSummary').innerHTML=`Tested so far: <b>BTC 15-min fair value</b> (parity with market; taker loses to fees; maker queues behind ~3k contracts), <b>weather forecast model</b> (market's Brier beats it), <b>thin-book weather market-making</b> (running in paper). The bias scan below asks a broader question — across ${(scan.series||[]).length} liquid series and ${scan.n_samples} price samples, where does the crowd systematically misprice? <b>${cands.length} bucket(s)</b> currently pass the bar (t ≥ 3, n ≥ 100). Anything that passes gets a strategy and a paper run; anything that doesn't is noise.`;
-}
-document.querySelectorAll('#scanT th').forEach(th=>th.onclick=()=>{ const k=th.dataset.k; if(!k) return; scanSort= scanSort.k===k?{k,dir:-scanSort.dir}:{k,dir:-1}; document.querySelectorAll('#scanT th').forEach(x=>x.classList.toggle('sorted',x===th)); renderScan(); });
-$('#scanMinN').oninput=renderScan; $('#scanScope').onchange=renderScan;
-
-async function loadReports(){
-  const all=await j('/api/reports');
-  const scans=all.filter(r=>r.kind==='bias-scan'); scans.sort((a,b)=>b.created_ms-a.created_ms);
-  if(scans[0]){ scan=await j('/api/report?name='+encodeURIComponent(scans[0]._file)); } renderScan(); renderRules(); renderPipe();
-  reportsCache=all.filter(r=>r.kind!=='bias-scan');
-  $('#reportsT tbody').innerHTML=reportsCache.map((r,i)=>{ const p=r.params||{}; return `<tr class="clickable" data-i="${i}"><td>${new Date(r.created_ms).toLocaleDateString()}</td><td>${p.series||''}</td><td>${(p.from||'all').slice(5)}→${(p.to||'all').slice(5)}</td><td>${p.maker?'maker q'+p.maker_touch_fill_prob:'taker'}</td><td>${p.edge}</td><td>${p.blend??0}</td><td>${r.markets_traded}</td><td class="${cls(r.net_pnl)}">${fmt$(r.net_pnl)}</td><td>${r.fees.toFixed(0)}</td><td>${(100*r.win_rate).toFixed(0)}</td><td class="${cls(r.pnl_per_contract)}">${r.pnl_per_contract.toFixed(4)}</td><td>${r.max_drawdown.toFixed(0)}</td></tr>`; }).join('')||'<tr><td colspan=12 class="muted">no backtests yet</td></tr>';
-  document.querySelectorAll('#reportsT tr.clickable').forEach(tr=>tr.onclick=async()=>{ const r=reportsCache[+tr.dataset.i]; const full=await j('/api/report?name='+encodeURIComponent(r._file)); const pts=[]; let c=0; (full.markets||[]).forEach((m,i)=>{c+=m.pnl; pts.push({x:i+1,y:+c.toFixed(2)});}); if(btChart){btChart.destroy();btChart=null;} drawLine('btChart', btChart, ch=>btChart=ch, pts, r._file, 'settled markets'); });
-}
-
-async function loadData(){ const d=await j('/api/data'); $('#data').innerHTML=d.map(root=>`<div style="margin-bottom:10px"><b>${root.root}</b><table>${Object.entries(root.kinds).map(([k,v])=>`<tr><td>${k}</td><td>${v.files} files</td><td>${(v.bytes/1048576).toFixed(1)} MB</td><td class="muted">${v.newest_ms?ago(v.newest_ms):''}</td></tr>`).join('')}</table></div>`).join('')||'no data dirs'; }
-async function loadLogs(){ const files=await j('/api/logs'); const sel=$('#logSel'); const prev=sel.value; sel.innerHTML=files.map(f=>`<option value="${f.file}">${f.file} (${(f.bytes/1024).toFixed(0)} KB)</option>`).join(''); if(files.find(f=>f.file===prev)) sel.value=prev; if(sel.value){ const t=await j('/api/logs?file='+encodeURIComponent(sel.value)+'&lines=200'); $('#log').textContent=(t.lines||[]).join('\n'); const pre=$('#log'); pre.scrollTop=pre.scrollHeight; } }
+async function loadUniverse(){ try { uni = await j('/api/report?name=universe.json'); renderNow(); renderTests(); } catch(e){} }
+async function loadData(){ const d=await j('/api/data'); $('#data').innerHTML = '<ul>'+d.map(root=>`<li><b>${root.root}</b><br><span>${Object.entries(root.kinds).map(([k,v])=>`${k}: ${v.files} files, ${(v.bytes/1048576).toFixed(0)} MB`).join(' · ')||'empty'}</span></li>`).join('')+'</ul>'; }
+async function loadLogs(){ const files=await j('/api/logs'); const sel=$('#logSel'); const prev=sel.value; sel.innerHTML=files.map(f=>`<option value="${f.file}">${f.file}</option>`).join(''); if(files.find(f=>f.file===prev)) sel.value=prev; if(sel.value){ const t=await j('/api/logs?file='+encodeURIComponent(sel.value)+'&lines=200'); $('#log').textContent=(t.lines||[]).join('\n'); $('#log').scrollTop=$('#log').scrollHeight; } }
 $('#logSel').onchange=loadLogs;
-setInterval(()=>{ $('#clock').textContent=new Date().toLocaleString(); },1000);
-loadRuns(); loadReports(); loadData(); loadLogs(); loadLab(); loadUniverse(); loadProgress();
-setInterval(loadRuns,2000); setInterval(loadLogs,5000); setInterval(loadData,30000); setInterval(loadReports,60000); setInterval(loadLab,5000); setInterval(loadUniverse,60000); setInterval(loadProgress,10000);
+setInterval(()=>{ $('#clock').textContent=new Date().toLocaleTimeString(); },1000);
+loadAll(); loadUniverse(); loadData(); loadLogs();
+setInterval(loadAll,3000); setInterval(loadUniverse,60000); setInterval(loadData,60000); setInterval(loadLogs,8000);
 </script>
 </body>
 </html>
