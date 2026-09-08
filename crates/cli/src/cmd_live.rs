@@ -59,6 +59,9 @@ pub struct FeedArgs {
     /// With --all-open: fetch the open price (one request per market) only for these categories
     #[arg(long = "open-px-category", default_values_t = vec!["Economics".to_string()])]
     pub open_px_categories: Vec<String>,
+    /// Poll NWS latest observations for the stations of the followed weather series (°F Ref events)
+    #[arg(long)]
+    pub nws_obs: bool,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -223,6 +226,19 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
                 warn!(error = %e, "coinbase task ended");
             }
         });
+    }
+
+    // NWS observations for weather series
+    if a.nws_obs {
+        let stations: Vec<String> = a.series.iter().filter_map(|s| mb_coinbase::nws::station_for(s)).map(String::from).collect();
+        if !stations.is_empty() {
+            let txc = tx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = mb_coinbase::nws::run(stations, Duration::from_secs(60), txc).await {
+                    warn!(error = %e, "nws feed ended");
+                }
+            });
+        }
     }
 
     // Polymarket
@@ -661,6 +677,12 @@ pub fn build_strategy(a: &PaperArgs) -> Result<(Box<dyn mb_core::Strategy>, Stri
             info!(rules = cfg.rules.len(), stake = cfg.stake, "rule trader");
             let series = format!("{} rules", cfg.rules.len());
             Ok((Box::new(mb_strategy::RuleTrader::new(cfg)), series))
+        }
+        "weather-lock" | "weather_lock" => {
+            let mut cfg = mb_strategy::WeatherLockConfig::default();
+            cfg.stake = a.stake;
+            let series = cfg.stations.keys().cloned().collect::<Vec<_>>().join(",");
+            Ok((Box::new(mb_strategy::WeatherLock::new(cfg)), series))
         }
         "spread-maker" | "spread_maker" => {
             let path = if a.config.to_string_lossy().contains("btc15m") { PathBuf::from("strategies/spread_maker.toml") } else { a.config.clone() };

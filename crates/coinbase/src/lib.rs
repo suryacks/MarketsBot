@@ -1,9 +1,12 @@
 //! Coinbase Exchange public data: historical 1-minute candles (for backtests)
 //! and the live `ticker` WebSocket (reference price for crypto strategies).
+//! Also hosts the NWS observation feed (`nws` module) — external reference data.
 //!
 //! Kalshi's crypto markets settle on CF Benchmarks' BRTI, which is itself an
 //! aggregate of Coinbase/Kraken/Bitstamp/etc. spot prices — Coinbase spot is a
 //! close, fast proxy.
+
+pub mod nws;
 
 use anyhow::{anyhow, Context, Result};
 use futures_util::{SinkExt, StreamExt};

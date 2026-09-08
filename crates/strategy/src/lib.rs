@@ -12,6 +12,9 @@ pub mod rules;
 pub use flow::{FlowConfig, FlowStrategy};
 pub mod spread_maker;
 pub mod vol;
+pub mod weather_lock;
+
+pub use weather_lock::{WeatherLock, WeatherLockConfig};
 
 pub use rules::{RuleTrader, RuleTraderConfig};
 
