@@ -2,6 +2,7 @@ mod cmd_backtest;
 mod cmd_calibrate;
 mod cmd_dashboard;
 mod cmd_history;
+mod cmd_lab;
 mod cmd_live;
 mod cmd_scan;
 mod cmd_tools;
@@ -26,6 +27,8 @@ enum Cmd {
     Calibrate(cmd_calibrate::Args),
     /// Exchange-wide bias scan: where does price ≠ realized frequency after fees, across many series?
     ScanBias(cmd_scan::Args),
+    /// Strategy lab: run the strategies/lab.toml matrix of backtests (fetching data as needed); results feed the dashboard.
+    Lab(cmd_lab::Args),
     /// Record live market data (Kalshi books/trades, Coinbase ref prices, Polymarket books) to Parquet.
     Collect(cmd_live::CollectArgs),
     /// Paper-trade a strategy on live data with simulated fills (no orders sent).
@@ -58,6 +61,7 @@ async fn main() -> Result<()> {
         Cmd::Backtest(a) => cmd_backtest::run(a).await,
         Cmd::Calibrate(a) => cmd_calibrate::run(a).await,
         Cmd::ScanBias(a) => cmd_scan::run(a).await,
+        Cmd::Lab(a) => cmd_lab::run(a).await,
         Cmd::Collect(a) => cmd_live::collect(a).await,
         Cmd::Paper(a) => cmd_live::paper(a).await,
         Cmd::Live(a) => cmd_live::live(a).await,

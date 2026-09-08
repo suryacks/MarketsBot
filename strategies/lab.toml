@@ -1,0 +1,72 @@
+# Strategy lab: every experiment is a (strategy × market × window) backtest on historical data.
+# Run: mbot lab            (results -> reports/lab/*.json, shown on the dashboard's Lab tab)
+# Verdict: PASS = net > 0, t >= 2, >= 100 markets. Only PASS strategies go to paper, then live ($100 cap).
+
+# ---- 15-minute crypto binaries: digital-option fair value from the live spot price ----
+[[experiment]]
+name = "btc15m-taker"
+description = "BTC 15-min: take the touch when model fair (spot+vol) disagrees with the market by >= edge"
+strategy = "btc15m"
+series = ["KXBTC15M"]
+ref_product = "BTC-USD"
+days = 10
+edges = [0.03, 0.05, 0.08]
+blend = 0.5
+
+[[experiment]]
+name = "btc15m-maker"
+description = "BTC 15-min: rest post-only quotes at fair -/+ edge (zero maker fee); fills need queue priority"
+strategy = "btc15m"
+series = ["KXBTC15M"]
+ref_product = "BTC-USD"
+days = 10
+edges = [0.02, 0.03, 0.05]
+maker = true
+blend = 0.5
+maker_touch_fill_prob = 0.25
+
+[[experiment]]
+name = "eth15m-taker"
+description = "Same fair-value model on ETH 15-min binaries"
+strategy = "btc15m"
+series = ["KXETH15M"]
+ref_product = "ETH-USD"
+days = 10
+edges = [0.03, 0.05, 0.08]
+blend = 0.5
+
+[[experiment]]
+name = "eth15m-maker"
+description = "Fair-value maker on ETH 15-min binaries"
+strategy = "btc15m"
+series = ["KXETH15M"]
+ref_product = "ETH-USD"
+days = 10
+edges = [0.02, 0.03, 0.05]
+maker = true
+blend = 0.5
+maker_touch_fill_prob = 0.25
+
+[[experiment]]
+name = "sol15m-taker"
+description = "Fair-value taker on SOL 15-min binaries"
+strategy = "btc15m"
+series = ["KXSOL15M"]
+ref_product = "SOL-USD"
+days = 10
+edges = [0.03, 0.05, 0.08]
+blend = 0.5
+
+# ---- thin-book market making on recorded live books (needs data/live-weather from `mbot collect`) ----
+[[experiment]]
+name = "weather-spread-maker-book"
+description = "Model-free market making in daily weather buckets, replayed on recorded order books with queue position"
+strategy = "spread-maker"
+series = ["KXHIGHNY", "KXHIGHCHI", "KXHIGHMIA", "KXHIGHLAX", "KXHIGHAUS", "KXHIGHPHIL", "KXHIGHDEN"]
+data = "data/live-weather"
+config = "strategies/spread_maker.toml"
+mode = "book"
+ref_source = "ticks"
+days = 30
+edges = [0.01, 0.02]
+maker = true

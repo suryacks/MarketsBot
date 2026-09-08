@@ -57,7 +57,7 @@ pub struct PaperArgs {
     pub feed: FeedArgs,
     #[arg(long, default_value = "strategies/btc15m.toml")]
     pub config: PathBuf,
-    #[arg(long, default_value_t = 1000.0)]
+    #[arg(long, default_value_t = 100.0)]
     pub bankroll: f64,
     #[arg(long, default_value_t = 250)]
     pub latency_ms: i64,

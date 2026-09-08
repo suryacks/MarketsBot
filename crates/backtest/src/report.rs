@@ -29,6 +29,8 @@ pub struct Report {
     pub pnl_per_contract: f64,
     pub max_drawdown: f64,
     pub sharpe_per_market: f64,
+    /// mean per-market PnL / standard error — the honest "is this real" number.
+    pub t_stat: f64,
     pub initial_cash: f64,
     pub final_cash: f64,
     pub markets: Vec<MarketPnl>,
@@ -84,6 +86,7 @@ impl Report {
             pnl_per_contract: if contracts > 0.0 { net / contracts } else { 0.0 },
             max_drawdown: mdd,
             sharpe_per_market: sharpe,
+            t_stat: sharpe * (n as f64).sqrt(),
             initial_cash: initial_cash.to_f64(),
             final_cash: final_cash.to_f64(),
             markets,
@@ -102,7 +105,7 @@ impl Report {
              avg pnl / market    ${:.3}\n\
              win rate (markets)  {:.1}%\n\
              max drawdown        ${:.2}\n\
-             sharpe (per-market) {:.3}\n",
+             sharpe (per-market) {:.3}   t-stat {:.2}\n",
             self.strategy,
             self.markets_seen,
             self.markets_traded,
@@ -118,6 +121,7 @@ impl Report {
             100.0 * self.win_rate,
             self.max_drawdown,
             self.sharpe_per_market,
+            self.t_stat,
         )
     }
 

@@ -29,18 +29,32 @@
   .row { display:flex; gap:16px; flex-wrap:wrap; align-items:baseline } .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; font-size:13px } .grid2 b { font-variant-numeric: tabular-nums }
   .bar { height:6px; background:#232838; border-radius:3px; overflow:hidden } .bar i { display:block; height:100%; background:var(--acc) }
   .explain { font-size:12.5px; color:var(--muted); line-height:1.5 } .explain b { color:var(--fg) }
+  .pipe { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px } .stage { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 12px } .stage h3 { margin:0 0 4px; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted) } .stage .big { font-size:22px; font-weight:600 } .stage ul { margin:6px 0 0; padding-left:16px; font-size:12px; color:var(--muted) }
+  .v { display:inline-block; padding:2px 9px; border-radius:6px; font-size:11px; font-weight:600; letter-spacing:.4px } .v.PASS { background:#143126; color:var(--pos) } .v.FAIL { background:#3a1f1f; color:var(--neg) } .v.INCONCLUSIVE { background:#3b2b12; color:var(--warn) } .v.running { background:#1f2a44; color:var(--acc) } .v.error { background:#3a1f1f; color:var(--neg) }
+  @media (max-width: 900px) { .pipe { grid-template-columns: 1fr 1fr } }
 </style>
 </head>
 <body>
 <header>
   <h1>MarketsBot</h1>
-  <nav><button data-tab="overview" class="on">Overview</button><button data-tab="trading">Trading</button><button data-tab="research">Research</button><button data-tab="data">Data &amp; Logs</button></nav>
+  <nav><button data-tab="lab" class="on">Strategy Lab</button><button data-tab="overview">Live Runs</button><button data-tab="trading">Trading</button><button data-tab="research">Research</button><button data-tab="data">Data &amp; Logs</button></nav>
   <span style="flex:1"></span>
   <span class="muted small" id="freshness"></span>
   <span class="muted small" id="clock"></span>
 </header>
 <main>
-<section id="tab-overview">
+<section id="tab-lab">
+  <div class="card"><h2>The pipeline <span class="muted small">a strategy must pass each stage before the next; real money is capped at $100</span></h2>
+    <div class="pipe" id="pipe"></div>
+    <div class="explain" style="margin-top:10px"><b>PASS</b> = net PnL &gt; 0, t-stat ≥ 2, ≥ 100 markets on historical data. <b>FAIL</b> = ≥ 100 markets and no edge. <b>INCONCLUSIVE</b> = not enough markets yet. t-stat = average per-market PnL divided by its standard error: 2 means "probably not luck", 3 means "worth money". Everything runs on a $100 bankroll with position caps to match.</div></div>
+  <div class="card"><h2>Experiments <span class="muted small" id="labMeta">reading reports/lab…</span></h2>
+    <div class="scroll tall"><table id="labT"><thead><tr><th>strategy</th><th>markets</th><th>what it does</th><th>stage</th><th>data</th><th>markets tested</th><th>fills</th><th>net PnL / $100</th><th>PnL per contract</th><th>win%</th><th>max DD</th><th>t</th><th>verdict</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><h2>Rule candidates from the exchange-wide bias scan <span class="muted small" id="ruleMeta"></span></h2>
+    <div class="explain" style="margin-bottom:8px">Each row is a mechanical rule — "in series X, at H before close, when the price is in bucket B, buy YES/NO" — scored on every settled market of the last 30 days after Kalshi's taker fee. Only rows with n ≥ 100 are shown; t ≥ 3 is the bar to become an experiment.</div>
+    <div class="scroll"><table id="ruleT"><thead><tr><th>series</th><th>before close</th><th>price bucket</th><th>rule</th><th>n markets</th><th>EV per contract</th><th>t</th><th>verdict</th></tr></thead><tbody></tbody></table></div></div>
+</section>
+
+<section id="tab-overview" hidden>
   <div class="card"><h2>Where things stand <span class="muted" id="asof"></span></h2><div class="verdict" id="verdict">loading…</div></div>
   <div class="card"><h2>Runs <span class="muted small">click to select · ● = updating now</span></h2><div class="runs" id="runs"></div></div>
   <div class="card c3"><h2>Equity</h2><div class="kpi" id="equity">–</div><div class="muted small" id="equitySub"></div></div>
@@ -89,6 +103,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{ document.quer
 function verdict(r){
   const el=$('#verdict'); el.className='verdict';
   if(!r){ el.textContent='No runs found in data/state. Start one: mbot paper --strategy spread-maker --series KXHIGHNY …'; return; }
+  $('#risk').innerHTML='';
   const n=r.settled_count||0, pnl=r.settled_pnl||0, w=r.settled_wins||0, live=(Date.now()-r.updated_ms)<15000;
   const isReal=r.mode==='LIVE';
   let txt=`<b>${r.run_id}</b> — ${r.strategy}, ${isReal?'REAL MONEY':'paper (simulated fills on real books)'}, ${live?'updating':'stopped/stale'}. `;
@@ -147,7 +162,33 @@ function drawLine(id, cur, set, pts, label, xlabel){
     options:{animation:false,parsing:false,maintainAspectRatio:false,scales:{x:{type:'linear',ticks:{color:'#8a93a8'},grid:{color:'#252b38'},title:{display:true,text:xlabel||'',color:'#8a93a8'}},y:{ticks:{color:'#8a93a8',callback:v=>'$'+v},grid:{color:'#252b38'}}},plugins:{legend:{display:false}}}}));
 }
 
-async function loadRuns(){ runs=await j('/api/runs'); runs=runs.filter(r=>r.run_id); render(); }
+async function loadRuns(){ runs=await j('/api/runs'); runs=runs.filter(r=>r.run_id); render(); renderPipe(); }
+
+let lab=[];
+function renderPipe(){
+  const done=lab.filter(e=>e.status==='done'), running=lab.filter(e=>e.status==='running');
+  const pass=done.filter(e=>e.verdict==='PASS'), fail=done.filter(e=>e.verdict==='FAIL'), inc=done.filter(e=>e.verdict==='INCONCLUSIVE');
+  const paper=runs.filter(r=>r.mode!=='LIVE'), live=runs.filter(r=>r.mode==='LIVE');
+  const rules=(scan?.rows||[]).filter(r=>r.n>=100&&r.series!=='ALL'&&!r.series.startsWith('CAT:'));
+  const ruleCands=rules.filter(r=>r.t_stat>=3);
+  $('#pipe').innerHTML=`
+    <div class="stage"><h3>1 · Backtest on history</h3><div class="big">${lab.length+rules.length}<span class="muted small"> experiments</span></div><ul><li class="pos">${pass.length+ruleCands.length} pass</li><li class="neg">${fail.length+(rules.length-ruleCands.length)} fail</li><li class="warn">${inc.length} inconclusive</li><li>${running.length} running</li></ul></div>
+    <div class="stage"><h3>2 · Paper on live books</h3><div class="big">${paper.length}<span class="muted small"> running</span></div><ul>${paper.map(r=>`<li>${r.run_id}: <span class="${cls(r.equity-r.initial_cash)}">${fmt$(r.equity-r.initial_cash)}</span> · ${r.settled_count} settled</li>`).join('')||'<li>none</li>'}</ul></div>
+    <div class="stage"><h3>3 · Live, $100 cap</h3><div class="big">${live.length}<span class="muted small"> running</span></div><ul>${live.map(r=>`<li>${r.run_id}: <span class="${cls(r.cash-r.initial_cash)}">${fmt$(r.cash-r.initial_cash)}</span></li>`).join('')||'<li>nothing has earned it yet</li>'}</ul></div>
+    <div class="stage"><h3>Gate to real money</h3><div class="big">${pass.length+ruleCands.length>0?'<span class="pos">open</span>':'<span class="neg">closed</span>'}</div><ul><li>needs a PASS on history</li><li>then positive paper PnL, ≥ 100 settled markets, t ≥ 2</li><li>then <code>mbot live … --max-notional 100</code></li></ul></div>`;
+}
+async function loadLab(){
+  lab=await j('/api/lab');
+  const rows=lab.slice().sort((a,b)=>({PASS:0,INCONCLUSIVE:1,FAIL:2}[a.verdict]??(a.status==='running'?-1:3))-({PASS:0,INCONCLUSIVE:1,FAIL:2}[b.verdict]??(b.status==='running'?-1:3)));
+  $('#labMeta').textContent=`${lab.length} experiments · ${lab.filter(e=>e.status==='running').length} running · updated ${ago(Math.max(0,...lab.map(e=>e.updated_ms||0)))}`;
+  $('#labT tbody').innerHTML=rows.map(e=>{ const b=e.best||{}; const v=e.status==='done'?(e.verdict||'INCONCLUSIVE'):e.status; const sw=(e.sweeps||[]).length>1?`<div class="muted small">best of ${e.sweeps.length} edge settings (${e.sweeps.map(s=>s.edge).join(', ')})</div>`:''; return `<tr><td><b>${e.name}</b>${sw}</td><td>${(e.series||[]).join(', ')}</td><td class="muted" style="white-space:normal;max-width:320px">${e.description||''}</td><td>${e.status==='running'?`<span class="v running">${e.stage}…</span>`:'backtest'}</td><td class="muted">${e.mode||''} · ${e.days}d${e.events?` · ${(e.events/1e6).toFixed(1)}M events`:''}</td><td>${b.markets_traded??'–'}${b.markets_seen?`<span class="muted"> / ${b.markets_seen}</span>`:''}</td><td>${b.n_fills??'–'}</td><td class="${cls(b.net_pnl)}">${b.net_pnl!=null?fmt$(b.net_pnl):'–'}</td><td class="${cls(b.pnl_per_contract)}">${b.pnl_per_contract!=null?b.pnl_per_contract.toFixed(4):'–'}</td><td>${b.win_rate!=null?(100*b.win_rate).toFixed(0)+'%':'–'}</td><td>${b.max_drawdown!=null?'$'+b.max_drawdown.toFixed(0):'–'}</td><td class="${b.t_stat>=2?'pos':b.t_stat<=-2?'neg':''}">${b.t_stat!=null?b.t_stat.toFixed(2):'–'}</td><td><span class="v ${v}">${v}</span>${e.error?`<div class="neg small">${e.error}</div>`:''}</td></tr>`; }).join('')||'<tr><td colspan=13 class="muted">no experiments yet — run: mbot lab</td></tr>';
+  renderRules(); renderPipe();
+}
+function renderRules(){
+  const rules=(scan?.rows||[]).filter(r=>r.n>=100&&r.series!=='ALL'&&!r.series.startsWith('CAT:')).sort((a,b)=>b.t_stat-a.t_stat);
+  $('#ruleMeta').textContent= scan ? `${rules.length} rules with n ≥ 100 · scan of ${scan.days} days, ${scan.n_samples} samples` : 'no scan yet (mbot scan-bias is running or has not been run)';
+  $('#ruleT tbody').innerHTML=rules.slice(0,60).map(r=>{ const buy=r.ev_buy_yes>=r.ev_buy_no; const ev=buy?r.ev_buy_yes:r.ev_buy_no; const v=r.t_stat>=3&&ev>0?'PASS':(ev<=0||r.t_stat<1?'FAIL':'INCONCLUSIVE'); return `<tr><td>${r.series}</td><td>${hz(r.horizon_secs)}</td><td>${r.bucket_lo.toFixed(2)}–${r.bucket_hi.toFixed(2)}</td><td>${buy?'buy YES':'buy NO'} at ${r.avg_px.toFixed(3)} → resolves YES ${(100*r.yes_rate).toFixed(0)}%</td><td>${r.n}</td><td class="${cls(ev)}">${(ev>=0?'+':'')+ev.toFixed(3)}</td><td class="${r.t_stat>=3?'pos':r.t_stat>=2?'warn':''}">${r.t_stat.toFixed(2)}</td><td><span class="v ${v}">${v}</span></td></tr>`; }).join('')||'<tr><td colspan=8 class="muted">waiting for the bias scan</td></tr>';
+}
 
 let scanSort={k:'t_stat',dir:-1};
 function renderScan(){
@@ -167,7 +208,7 @@ $('#scanMinN').oninput=renderScan; $('#scanScope').onchange=renderScan;
 async function loadReports(){
   const all=await j('/api/reports');
   const scans=all.filter(r=>r.kind==='bias-scan'); scans.sort((a,b)=>b.created_ms-a.created_ms);
-  if(scans[0]){ scan=await j('/api/report?name='+encodeURIComponent(scans[0]._file)); } renderScan();
+  if(scans[0]){ scan=await j('/api/report?name='+encodeURIComponent(scans[0]._file)); } renderScan(); renderRules(); renderPipe();
   reportsCache=all.filter(r=>r.kind!=='bias-scan');
   $('#reportsT tbody').innerHTML=reportsCache.map((r,i)=>{ const p=r.params||{}; return `<tr class="clickable" data-i="${i}"><td>${new Date(r.created_ms).toLocaleDateString()}</td><td>${p.series||''}</td><td>${(p.from||'all').slice(5)}→${(p.to||'all').slice(5)}</td><td>${p.maker?'maker q'+p.maker_touch_fill_prob:'taker'}</td><td>${p.edge}</td><td>${p.blend??0}</td><td>${r.markets_traded}</td><td class="${cls(r.net_pnl)}">${fmt$(r.net_pnl)}</td><td>${r.fees.toFixed(0)}</td><td>${(100*r.win_rate).toFixed(0)}</td><td class="${cls(r.pnl_per_contract)}">${r.pnl_per_contract.toFixed(4)}</td><td>${r.max_drawdown.toFixed(0)}</td></tr>`; }).join('')||'<tr><td colspan=12 class="muted">no backtests yet</td></tr>';
   document.querySelectorAll('#reportsT tr.clickable').forEach(tr=>tr.onclick=async()=>{ const r=reportsCache[+tr.dataset.i]; const full=await j('/api/report?name='+encodeURIComponent(r._file)); const pts=[]; let c=0; (full.markets||[]).forEach((m,i)=>{c+=m.pnl; pts.push({x:i+1,y:+c.toFixed(2)});}); if(btChart){btChart.destroy();btChart=null;} drawLine('btChart', btChart, ch=>btChart=ch, pts, r._file, 'settled markets'); });
@@ -177,8 +218,8 @@ async function loadData(){ const d=await j('/api/data'); $('#data').innerHTML=d.
 async function loadLogs(){ const files=await j('/api/logs'); const sel=$('#logSel'); const prev=sel.value; sel.innerHTML=files.map(f=>`<option value="${f.file}">${f.file} (${(f.bytes/1024).toFixed(0)} KB)</option>`).join(''); if(files.find(f=>f.file===prev)) sel.value=prev; if(sel.value){ const t=await j('/api/logs?file='+encodeURIComponent(sel.value)+'&lines=200'); $('#log').textContent=(t.lines||[]).join('\n'); const pre=$('#log'); pre.scrollTop=pre.scrollHeight; } }
 $('#logSel').onchange=loadLogs;
 setInterval(()=>{ $('#clock').textContent=new Date().toLocaleString(); },1000);
-loadRuns(); loadReports(); loadData(); loadLogs();
-setInterval(loadRuns,2000); setInterval(loadLogs,5000); setInterval(loadData,30000); setInterval(loadReports,60000);
+loadRuns(); loadReports(); loadData(); loadLogs(); loadLab();
+setInterval(loadRuns,2000); setInterval(loadLogs,5000); setInterval(loadData,30000); setInterval(loadReports,60000); setInterval(loadLab,5000);
 </script>
 </body>
 </html>

@@ -7,7 +7,7 @@ use mb_kalshi::{KalshiClient, MarketsQuery};
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-#[derive(ClapArgs, Debug)]
+#[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
     /// Kalshi series ticker, e.g. KXBTC15M, KXETH15M
     #[arg(long, default_value = "KXBTC15M")]

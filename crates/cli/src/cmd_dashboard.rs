@@ -23,6 +23,8 @@ pub struct Args {
     pub reports_dir: PathBuf,
     #[arg(long, default_value = "logs")]
     pub logs_dir: PathBuf,
+    #[arg(long, default_value = "reports/lab")]
+    pub lab_dir: PathBuf,
     /// Data roots to summarize (repeatable)
     #[arg(long = "data", default_values_t = vec!["data".to_string(), "data/live".to_string(), "data/live-weather".to_string()])]
     pub data_dirs: Vec<String>,
@@ -59,6 +61,12 @@ async fn runs(State(a): State<Shared>) -> Json<Value> {
     Json(json!(runs))
 }
 
+async fn lab(State(a): State<Shared>) -> Json<Value> {
+    let mut v = read_json_files(&a.lab_dir);
+    v.sort_by_key(|r| r["name"].as_str().unwrap_or("").to_string());
+    Json(json!(v))
+}
+
 async fn reports(State(a): State<Shared>) -> Json<Value> {
     let mut rs: Vec<Value> = read_json_files(&a.reports_dir)
         .into_iter()
@@ -67,6 +75,10 @@ async fn reports(State(a): State<Shared>) -> Json<Value> {
             let n = r["markets"].as_array().map(|m| m.len()).unwrap_or(0);
             r["n_markets_rows"] = json!(n);
             r.as_object_mut().unwrap().remove("markets");
+            if r["kind"] == "bias-scan" {
+                r.as_object_mut().unwrap().remove("rows");
+                r.as_object_mut().unwrap().remove("series");
+            }
             r
         })
         .collect();
@@ -193,6 +205,7 @@ pub async fn run(a: Args) -> Result<()> {
         .route("/", get(index))
         .route("/api/runs", get(runs))
         .route("/api/reports", get(reports))
+        .route("/api/lab", get(lab))
         .route("/api/report", get(report))
         .route("/api/data", get(data))
         .route("/api/logs", get(logs))
