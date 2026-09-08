@@ -73,9 +73,18 @@ pub struct PaperArgs {
     /// Override config: realized | implied | max | mean
     #[arg(long)]
     pub vol_source: Option<String>,
-    /// btc15m | spread-maker
+    /// btc15m | spread-maker | rules
     #[arg(long, default_value = "btc15m")]
     pub strategy: String,
+    /// rules strategy: universe.json (PASS rows) or a rules JSON array
+    #[arg(long, default_value = "reports/universe.json")]
+    pub rules: PathBuf,
+    /// rules strategy: which universe verdict to trade (PASS | INCONCLUSIVE)
+    #[arg(long, default_value = "PASS")]
+    pub rules_verdict: String,
+    /// rules strategy: dollars per trade
+    #[arg(long, default_value_t = 2.0)]
+    pub stake: f64,
     /// Name for this run (dashboard); default derived from strategy + time
     #[arg(long)]
     pub run_id: Option<String>,
@@ -459,6 +468,15 @@ pub async fn collect(a: CollectArgs) -> Result<()> {
 /// Build the strategy named by `--strategy`, applying CLI overrides.
 pub fn build_strategy(a: &PaperArgs) -> Result<(Box<dyn mb_core::Strategy>, String)> {
     match a.strategy.as_str() {
+        "rules" => {
+            let cfg = mb_strategy::RuleTraderConfig::from_json(&a.rules, &a.rules_verdict, 0.0, a.stake)?;
+            if cfg.rules.is_empty() {
+                anyhow::bail!("no {} rules in {}", a.rules_verdict, a.rules.display());
+            }
+            info!(rules = cfg.rules.len(), stake = cfg.stake, "rule trader");
+            let series = format!("{} rules", cfg.rules.len());
+            Ok((Box::new(mb_strategy::RuleTrader::new(cfg)), series))
+        }
         "spread-maker" | "spread_maker" => {
             let path = if a.config.to_string_lossy().contains("btc15m") { PathBuf::from("strategies/spread_maker.toml") } else { a.config.clone() };
             let mut cfg = if path.exists() { mb_strategy::SpreadMakerConfig::load(&path)? } else { mb_strategy::SpreadMakerConfig::default() };
