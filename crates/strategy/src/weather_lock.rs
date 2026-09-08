@@ -9,6 +9,7 @@
 //! hourly/special observation, so "decided by observation" is one-directional
 //! and safe; the residual risk is a station/report mismatch.
 
+use crate::btc15m::kalshi_tick;
 use anyhow::{Context as _, Result};
 use mb_core::{Context, Fp, MarketEvent, OrderRequest, Strategy, Tif};
 use serde::{Deserialize, Serialize};
@@ -359,29 +360,37 @@ impl WeatherLock {
             self.decided += 1;
             let Some(book) = ctx.book(&t) else { continue };
             let fee = ctx.fee_model(&t);
+            // Price the IOC at the WORST level still worth taking, not at the touch. An order
+            // priced exactly at the best quote fills nothing if that quote is pulled in the
+            // milliseconds before it lands -- which is how the first San Francisco lock was
+            // missed -- whereas a limit set at our own floor sweeps every level in between and
+            // can still never fill worse than `min_edge`.
             let req = if decided_yes {
-                let Some((ask, aq)) = book.best_ask() else { continue };
+                let Some((ask, _)) = book.best_ask() else { continue };
                 let edge = 1.0 - ask.to_f64() - fee.fee_per_contract(ask, false);
                 if edge < self.cfg.min_edge {
                     continue;
                 }
-                let qty = (self.cfg.stake / ask.to_f64().max(0.02)).floor().min(aq.to_f64());
+                let floor_px = Fp::from_f64(1.0 - self.cfg.min_edge - fee.fee_per_contract(ask, false));
+                let limit = floor_px.round_down_to(kalshi_tick(floor_px)).max(ask);
+                let qty = (self.cfg.stake / limit.to_f64().max(0.02)).floor();
                 if qty < 1.0 {
                     continue;
                 }
-                OrderRequest::buy_yes(&t, ask, Fp::from_int(qty as i64), Tif::Ioc).tagged("wx_lock_yes")
+                OrderRequest::buy_yes(&t, limit, Fp::from_int(qty as i64), Tif::Ioc).tagged("wx_lock_yes")
             } else {
-                let Some((bid, bq)) = book.best_bid() else { continue };
+                let Some((bid, _)) = book.best_bid() else { continue };
                 let edge = bid.to_f64() - fee.fee_per_contract(bid, false);
                 if edge < self.cfg.min_edge {
                     continue;
                 }
-                let no_px = 1.0 - bid.to_f64();
-                let qty = (self.cfg.stake / no_px.max(0.02)).floor().min(bq.to_f64());
+                let floor_px = Fp::from_f64(self.cfg.min_edge + fee.fee_per_contract(bid, false));
+                let limit = floor_px.round_up_to(kalshi_tick(floor_px)).min(bid);
+                let qty = (self.cfg.stake / (1.0 - limit.to_f64()).max(0.02)).floor();
                 if qty < 1.0 {
                     continue;
                 }
-                OrderRequest::sell_yes(&t, bid, Fp::from_int(qty as i64), Tif::Ioc).tagged("wx_lock_no")
+                OrderRequest::sell_yes(&t, limit, Fp::from_int(qty as i64), Tif::Ioc).tagged("wx_lock_no")
             };
             tracing::info!(ticker = %t, station, observed = obs, kind = if Self::is_low(&m.series) { "min" } else { "max" }, lo = m.lo, hi = m.hi, "WEATHER LOCK trade");
             // `traded` dies with the process; the exchange position is what survives a restart.
