@@ -118,7 +118,8 @@ impl KalshiWs {
 
         // the index feed has its own subscribe shape; market channels share one command
         if channels.contains(&Channel::CfBenchmarks) {
-            let sub = json!({ "type": "subscribe", "id": 99, "channels": ["cfbenchmarks_value"], "index_ids": self.indices });
+            // NB: the docs show a `"type":"subscribe"` form; the server rejects it ("Unknown command").
+            let sub = json!({ "id": 99, "cmd": "subscribe", "params": { "channels": ["cfbenchmarks_value"], "index_ids": self.indices } });
             sink.send(Message::Text(sub.to_string().into())).await?;
             info!(indices = ?self.indices, "kalshi ws subscribed to cfbenchmarks_value");
         }
@@ -217,23 +218,26 @@ pub fn parse_message(v: &Value) -> Vec<MarketEvent> {
     };
     let ticker = m.get("market_ticker").and_then(Value::as_str).unwrap_or("").to_string();
     match typ {
-        "cfbenchmarks_value" => {
+        "cfbenchmarks_value" | "cfbenchmarks_value_5hz" => {
             let index = m.get("index_id").and_then(Value::as_str).unwrap_or("").to_string();
             // `data` is a JSON string: {"type":"value","id":"BRTI","time":ms,"value":"68000.12"}
             let inner: Option<Value> = m.get("data").and_then(Value::as_str).and_then(|s| serde_json::from_str(s).ok());
+            let num = |v: &Value| match v {
+                Value::String(s) => s.parse::<f64>().ok(),
+                Value::Number(n) => n.as_f64(),
+                _ => None,
+            };
             let px = inner
                 .as_ref()
                 .and_then(|d| d.get("value"))
-                .and_then(|v| match v {
-                    Value::String(s) => s.parse::<f64>().ok(),
-                    Value::Number(n) => n.as_f64(),
-                    _ => None,
-                });
+                .and_then(num)
+                .or_else(|| m.get("value_usd").and_then(num));
             let Some(px) = px else { return vec![] };
             let ts = inner
                 .as_ref()
                 .and_then(|d| d.get("time"))
                 .and_then(Value::as_i64)
+                .or_else(|| m.get("source_ts_ms").and_then(Value::as_i64))
                 .or_else(|| m.get("received_at").and_then(Value::as_i64))
                 .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
             let avg = m
