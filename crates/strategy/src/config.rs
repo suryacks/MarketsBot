@@ -76,6 +76,10 @@ pub struct Btc15mConfig {
     pub endgame: bool,
     /// Endgame: stop this many seconds before close (order latency + safety).
     pub endgame_stop_secs: f64,
+    /// Invert every signal: take the opposite side of what the model says. Tests the claim
+    /// that the fair-value direction is systematically backwards on these markets (oracle /
+    /// settlement-feed divergence), rather than merely uninformative.
+    pub invert: bool,
     /// Maker mode: rest post-only quotes at fair ∓ min_edge instead of taking the touch.
     pub maker: bool,
     /// Contracts per resting quote in maker mode.
@@ -118,6 +122,7 @@ impl Default for Btc15mConfig {
             fair_max: 1.0,
             endgame: false,
             endgame_stop_secs: 3.0,
+            invert: false,
             maker: false,
             maker_qty: 10.0,
         }

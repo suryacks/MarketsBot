@@ -203,6 +203,7 @@ pub async fn run(a: Args) -> Result<()> {
             max_entries: e.max_entries,
             maker_touch_fill_prob: e.maker_touch_fill_prob,
             endgame: e.endgame,
+            invert: false,
         };
         let events = match load_spec_events(&spec) {
             Ok(ev) => ev,

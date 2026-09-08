@@ -210,6 +210,9 @@ impl Btc15mStrategy {
             return;
         }
 
+        // Inversion is applied to the fair value itself, so every downstream decision
+        // (side, Kelly size, edge test) flips consistently.
+        let fair = if self.cfg.invert { 1.0 - fair } else { fair };
         if self.cfg.maker && !endgame_now {
             self.evaluate_maker(ticker, fair, ctx);
         } else {

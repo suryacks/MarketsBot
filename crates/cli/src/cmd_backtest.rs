@@ -66,6 +66,9 @@ pub struct Args {
     /// Endgame mode: trade inside the settlement-average window with the running average
     #[arg(long)]
     pub endgame: bool,
+    /// Invert the model: take the opposite side of every signal
+    #[arg(long)]
+    pub invert: bool,
     /// Where to write CSV reports
     #[arg(long, default_value = "reports")]
     pub report: PathBuf,
@@ -102,6 +105,7 @@ pub struct BacktestSpec {
     pub max_entries: Option<u32>,
     pub maker_touch_fill_prob: f64,
     pub endgame: bool,
+    pub invert: bool,
 }
 
 pub struct BacktestOutcome {
@@ -194,9 +198,10 @@ pub fn run_spec(spec: &BacktestSpec, events: &[MarketEvent]) -> Result<BacktestO
                 cfg.endgame = true;
                 cfg.max_entries_per_market = cfg.max_entries_per_market.max(6);
             }
+            cfg.invert = spec.invert;
             cfg.scale_to_bankroll(spec.bankroll);
             let p = serde_json::json!({"edge": cfg.min_edge, "maker": cfg.maker, "endgame": cfg.endgame, "min_tau_secs": cfg.min_tau_secs, "vol_source": cfg.vol_source, "blend": cfg.market_blend,
-                                       "max_entries": cfg.max_entries_per_market, "max_contracts_per_market": cfg.max_contracts_per_market, "maker_qty": cfg.maker_qty});
+                                       "max_entries": cfg.max_entries_per_market, "max_contracts_per_market": cfg.max_contracts_per_market, "maker_qty": cfg.maker_qty, "invert": cfg.invert});
             (Box::new(Btc15mStrategy::new(cfg)), p)
         }
     };
@@ -273,6 +278,7 @@ pub async fn run(a: Args) -> Result<()> {
         max_entries: a.max_entries,
         maker_touch_fill_prob: a.maker_touch_fill_prob,
         endgame: a.endgame,
+        invert: a.invert,
     };
     let events = load_spec_events(&base)?;
     let mut summary = Vec::new();
