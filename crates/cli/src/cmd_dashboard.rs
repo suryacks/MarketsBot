@@ -75,7 +75,7 @@ async fn reports(State(a): State<Shared>) -> Json<Value> {
             let n = r["markets"].as_array().map(|m| m.len()).unwrap_or(0);
             r["n_markets_rows"] = json!(n);
             r.as_object_mut().unwrap().remove("markets");
-            if r["kind"] == "bias-scan" {
+            if r["kind"] == "bias-scan" || r["kind"] == "universe" {
                 r.as_object_mut().unwrap().remove("rows");
                 r.as_object_mut().unwrap().remove("series");
             }
