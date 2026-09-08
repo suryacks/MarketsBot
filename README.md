@@ -54,6 +54,21 @@ mbot backtest --series KXBTC15M --edges 0.02,0.03,0.05 --latency-ms 250
 # 3. Paper-trade live (works without keys via 1 Hz REST polling; keys => full WS books)
 mbot paper --series KXBTC15M --record data/live
 
+# 4. Dashboard (live runs, positions, fills, backtests, bias scan, data, logs)
+mbot dashboard                              # http://localhost:8080
+
+# 5. Model-free thin-book market maker on weather series, paper
+mbot paper --strategy spread-maker --config strategies/spread_maker.toml \
+  --series KXHIGHNY --series KXHIGHCHI --coinbase "" --run-id weather-mm
+
+# 6. Exchange-wide bias scan: where does price ≠ realized frequency after fees?
+mbot scan-bias --days 30 --min-volume 300 --tag 30d     # -> reports/bias-30d.json (Research tab)
+
+# 7. Real money, hard-capped (demo env by default; prod needs the explicit flag)
+mbot live --strategy spread-maker --series KXHIGHNY --coinbase "" \
+  --max-notional 100 --max-order-qty 5 --max-loss 30 --dry-run          # logs orders, sends nothing
+mbot live ... --i-understand-this-uses-real-money                      # sends orders on KALSHI_ENV=prod
+
 # Utilities
 mbot markets --series KXBTC15M
 mbot book KXBTC15M-26SEP071445-45          # needs keys

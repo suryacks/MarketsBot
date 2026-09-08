@@ -6,158 +6,179 @@
 <title>MarketsBot</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
-  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --fg:#e6e8ee; --muted:#8b93a7; --pos:#3ecf8e; --neg:#ff6b6b; --acc:#6ea8fe; --warn:#f0b35a; }
-  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
-  header { display:flex; align-items:center; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5 }
-  header h1 { font-size:16px; margin:0; letter-spacing:.3px } header .muted { color:var(--muted); font-size:12px }
-  select { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px }
-  main { padding:16px 20px; display:grid; gap:14px; grid-template-columns: repeat(12, 1fr) }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; grid-column: span 12; min-width:0 }
-  .c3 { grid-column: span 3 } .c4 { grid-column: span 4 } .c6 { grid-column: span 6 } .c8 { grid-column: span 8 }
-  @media (max-width: 1100px) { .c3,.c4 { grid-column: span 6 } .c6,.c8 { grid-column: span 12 } }
-  @media (max-width: 700px) { .c3,.c4,.c6,.c8 { grid-column: span 12 } }
-  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin:0 0 8px }
-  .kpi { font-size:24px; font-weight:600; font-variant-numeric: tabular-nums } .kpi small { font-size:12px; color:var(--muted); font-weight:400; margin-left:6px }
-  .pos { color:var(--pos) } .neg { color:var(--neg) } .warn { color:var(--warn) } .muted { color:var(--muted) }
-  table { width:100%; border-collapse:collapse; font-variant-numeric: tabular-nums; font-size:13px } th,td { text-align:right; padding:5px 6px; border-bottom:1px solid var(--line); white-space:nowrap } th:first-child, td:first-child { text-align:left } th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.5px }
-  .scroll { overflow:auto; max-height:360px } .row { display:flex; gap:18px; flex-wrap:wrap; align-items:baseline }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; background:#232838; color:var(--muted) } .pill.live { background:#173a2b; color:var(--pos) } .pill.dead { background:#3a1f1f; color:var(--neg) }
-  pre { margin:0; font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-all; color:#c9d1e3; max-height:320px; overflow:auto }
-  .verdict { padding:10px 12px; border-left:3px solid var(--warn); background:#1c1a14; border-radius:6px; font-size:13px }
-  .verdict.ok { border-color:var(--pos); background:#14201a } .verdict.bad { border-color:var(--neg); background:#221616 }
-  a { color:var(--acc); text-decoration:none } .clickable { cursor:pointer } .clickable:hover { background:#1d2230 }
-  canvas { width:100% !important; height:220px !important }
+  :root { --bg:#0b0d12; --panel:#141821; --panel2:#1a1f2b; --line:#252b38; --fg:#e8eaf0; --muted:#8a93a8; --pos:#38d39f; --neg:#ff6b6b; --acc:#7aa9ff; --warn:#f2b45b; }
+  * { box-sizing:border-box } html,body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:10px 20px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5 }
+  header h1 { font-size:15px; margin:0; letter-spacing:.4px } .muted { color:var(--muted) } .small { font-size:12px }
+  nav { display:flex; gap:4px; margin-left:12px } nav button { background:transparent; border:1px solid transparent; color:var(--muted); padding:6px 12px; border-radius:8px; cursor:pointer; font-size:13px } nav button.on { background:var(--panel2); color:var(--fg); border-color:var(--line) }
+  select,input { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font-size:13px }
+  main { padding:16px 20px; display:grid; gap:14px; grid-template-columns: repeat(12, 1fr) } section { display:contents } section[hidden] { display:none }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; grid-column: span 12; min-width:0 }
+  .c3 { grid-column: span 3 } .c4 { grid-column: span 4 } .c6 { grid-column: span 6 } .c8 { grid-column: span 8 } .c9 { grid-column: span 9 }
+  @media (max-width: 1100px) { .c3,.c4 { grid-column: span 6 } .c6,.c8,.c9 { grid-column: span 12 } } @media (max-width: 700px) { .c3,.c4,.c6,.c8,.c9 { grid-column: span 12 } }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.9px; color:var(--muted); margin:0 0 8px; display:flex; justify-content:space-between; align-items:center }
+  .kpi { font-size:26px; font-weight:600; font-variant-numeric: tabular-nums; letter-spacing:-.3px } .kpi small { font-size:12px; color:var(--muted); font-weight:400; margin-left:6px }
+  .pos { color:var(--pos) } .neg { color:var(--neg) } .warn { color:var(--warn) }
+  table { width:100%; border-collapse:collapse; font-variant-numeric: tabular-nums; font-size:12.5px } th,td { text-align:right; padding:5px 7px; border-bottom:1px solid var(--line); white-space:nowrap } th:first-child, td:first-child { text-align:left } th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.5px; cursor:pointer; user-select:none; position:sticky; top:0; background:var(--panel) } th.sorted::after { content:' ▾'; color:var(--acc) }
+  .scroll { overflow:auto; max-height:380px } .scroll.tall { max-height:560px }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; background:#232838; color:var(--muted); margin-left:6px } .pill.live { background:#143126; color:var(--pos) } .pill.dead { background:#3a1f1f; color:var(--neg) } .pill.real { background:#3b2b12; color:var(--warn) }
+  pre { margin:0; font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; word-break:break-all; color:#c9d1e3; max-height:520px; overflow:auto }
+  .verdict { padding:12px 14px; border-left:3px solid var(--warn); background:#1b1912; border-radius:8px; font-size:13.5px; line-height:1.55 } .verdict.ok { border-color:var(--pos); background:#12201a } .verdict.bad { border-color:var(--neg); background:#221515 }
+  .runs { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap:10px } .run { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; cursor:pointer } .run.sel { border-color:var(--acc) } .run b { font-size:13px } .run .n { font-size:20px; font-weight:600; margin-top:4px }
+  .clickable { cursor:pointer } tr.clickable:hover { background:#1d2230 } canvas { width:100% !important } .h220 { height:220px !important } .h300 { height:300px !important }
+  .row { display:flex; gap:16px; flex-wrap:wrap; align-items:baseline } .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; font-size:13px } .grid2 b { font-variant-numeric: tabular-nums }
+  .bar { height:6px; background:#232838; border-radius:3px; overflow:hidden } .bar i { display:block; height:100%; background:var(--acc) }
+  .explain { font-size:12.5px; color:var(--muted); line-height:1.5 } .explain b { color:var(--fg) }
 </style>
 </head>
 <body>
 <header>
   <h1>MarketsBot</h1>
-  <span class="muted" id="clock"></span>
+  <nav><button data-tab="overview" class="on">Overview</button><button data-tab="trading">Trading</button><button data-tab="research">Research</button><button data-tab="data">Data &amp; Logs</button></nav>
   <span style="flex:1"></span>
-  <label class="muted">run <select id="runSel"></select></label>
-  <span class="muted" id="freshness"></span>
+  <span class="muted small" id="freshness"></span>
+  <span class="muted small" id="clock"></span>
 </header>
 <main>
-  <div class="card" id="verdictCard"><h2>Where things stand</h2><div class="verdict" id="verdict">loading…</div></div>
+<section id="tab-overview">
+  <div class="card"><h2>Where things stand <span class="muted" id="asof"></span></h2><div class="verdict" id="verdict">loading…</div></div>
+  <div class="card"><h2>Runs <span class="muted small">click to select · ● = updating now</span></h2><div class="runs" id="runs"></div></div>
+  <div class="card c3"><h2>Equity</h2><div class="kpi" id="equity">–</div><div class="muted small" id="equitySub"></div></div>
+  <div class="card c3"><h2>Realized (settled)</h2><div class="kpi" id="settledPnl">–</div><div class="muted small" id="settledSub"></div></div>
+  <div class="card c3"><h2>Open exposure · mark-to-mid</h2><div class="kpi" id="unreal">–</div><div class="muted small" id="unrealSub"></div></div>
+  <div class="card c3"><h2>Execution quality</h2><div class="kpi" id="fills">–</div><div class="muted small" id="queueSub"></div></div>
+  <div class="card c8"><h2>Cumulative realized PnL, per settled market</h2><canvas id="eqChart" class="h220"></canvas></div>
+  <div class="card c4"><h2>Model / strategy state</h2><div id="strat" class="grid2">–</div><div class="explain" id="stratExplain" style="margin-top:8px"></div></div>
+  <div class="card"><h2>Markets being priced or quoted <span class="muted small" id="mktCount"></span></h2><div class="scroll"><table id="mkts"><thead><tr><th>ticker</th><th>closes in</th><th>market bid</th><th>market ask</th><th>spread</th><th>our fair</th><th>edge</th><th>our bid</th><th>our ask</th><th>position</th><th>mtm</th></tr></thead><tbody></tbody></table></div></div>
+</section>
 
-  <div class="card c3"><h2>Equity <span class="muted" id="modeTag"></span></h2><div class="kpi" id="equity">–</div><div class="muted" id="equitySub"></div></div>
-  <div class="card c3"><h2>Settled PnL</h2><div class="kpi" id="settledPnl">–</div><div class="muted" id="settledSub"></div></div>
-  <div class="card c3"><h2>Open exposure (mark-to-mid)</h2><div class="kpi" id="unreal">–</div><div class="muted" id="unrealSub"></div></div>
-  <div class="card c3"><h2>Fills · queue</h2><div class="kpi" id="fills">–</div><div class="muted" id="queueSub"></div></div>
+<section id="tab-trading" hidden>
+  <div class="card c6"><h2>Recent fills</h2><div class="scroll tall"><table id="fillsT"><thead><tr><th>time</th><th>ticker</th><th>side</th><th>px</th><th>qty</th><th>fee</th><th>role</th><th>tag</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card c6"><h2>Resting orders <span class="muted small">"ahead" = contracts queued in front of us</span></h2><div class="scroll tall"><table id="ordersT"><thead><tr><th>ticker</th><th>side</th><th>px</th><th>remaining</th><th>ahead</th><th>tag</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><h2>Settled markets in this run</h2><div class="scroll tall"><table id="settledT"><thead><tr><th>ticker</th><th>result</th><th>pnl</th><th>fees</th><th>fills</th><th>contracts</th><th>pnl / contract</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card"><h2>Risk (live runs)</h2><div id="risk" class="grid2 muted">no live run selected</div></div>
+</section>
 
-  <div class="card c8"><h2>Cumulative settled PnL per market</h2><canvas id="eqChart"></canvas></div>
-  <div class="card c4"><h2>Strategy state</h2><div id="strat" class="muted">–</div></div>
+<section id="tab-research" hidden>
+  <div class="card"><h2>What the research says</h2><div class="explain" id="researchSummary">loading…</div></div>
+  <div class="card"><h2>Exchange-wide bias scan <span class="muted small" id="scanMeta"></span></h2>
+    <div class="row small muted" style="margin-bottom:8px">min markets <input id="scanMinN" type="number" value="30" style="width:70px"> · scope <select id="scanScope"><option value="series">per series</option><option value="cat">per category</option><option value="all">whole exchange</option></select> · <span>EV = expected PnL per $1 contract after Kalshi taker fee; t = EV / standard error; a real, repeatable edge needs t ≥ 3 and n ≥ 100</span></div>
+    <div class="scroll tall"><table id="scanT"><thead><tr><th data-k="series">series</th><th data-k="horizon_secs">before close</th><th data-k="bucket_lo">price bucket</th><th data-k="n">n</th><th data-k="avg_px">avg px</th><th data-k="yes_rate">resolved YES</th><th data-k="ev_buy_yes">EV buy YES</th><th data-k="ev_buy_no">EV buy NO</th><th data-k="t_stat" class="sorted">t</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card c6"><h2>How well each series is priced <span class="muted small">market Brier at sampled horizons; lower = harder to beat</span></h2><div class="scroll"><table id="seriesT"><thead><tr><th>series</th><th>category</th><th>title</th><th>markets</th><th>samples</th><th>brier</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card c6"><h2>Backtests <span class="muted small">click a row for its equity curve</span></h2><div class="scroll"><table id="reportsT"><thead><tr><th>when</th><th>series</th><th>window</th><th>exec</th><th>edge</th><th>blend</th><th>mkts</th><th>net</th><th>fees</th><th>win%</th><th>pnl/ct</th><th>maxDD</th></tr></thead><tbody></tbody></table></div><canvas id="btChart" class="h220" style="margin-top:10px"></canvas></div>
+</section>
 
-  <div class="card c6"><h2>Markets being quoted / priced</h2><div class="scroll"><table id="mkts"><thead><tr><th>ticker</th><th>closes in</th><th>bid</th><th>ask</th><th>fair</th><th>edge</th><th>our bid</th><th>our ask</th><th>pos</th><th>mtm</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card c6"><h2>Recent fills</h2><div class="scroll"><table id="fillsT"><thead><tr><th>time</th><th>ticker</th><th>side</th><th>px</th><th>qty</th><th>fee</th><th>maker</th><th>tag</th></tr></thead><tbody></tbody></table></div></div>
-
-  <div class="card c6"><h2>Settled markets (this run)</h2><div class="scroll"><table id="settledT"><thead><tr><th>ticker</th><th>result</th><th>pnl</th><th>fees</th><th>fills</th><th>contracts</th></tr></thead><tbody></tbody></table></div></div>
-  <div class="card c6"><h2>Resting orders</h2><div class="scroll"><table id="ordersT"><thead><tr><th>ticker</th><th>side</th><th>px</th><th>remaining</th><th>ahead in queue</th><th>tag</th></tr></thead><tbody></tbody></table></div></div>
-
-  <div class="card"><h2>Backtests &amp; calibration (reports/) — click a row for its equity curve</h2><div class="scroll"><table id="reportsT"><thead><tr><th>when</th><th>series</th><th>window</th><th>exec</th><th>edge</th><th>vol</th><th>blend</th><th>markets</th><th>fills</th><th>net pnl</th><th>fees</th><th>win%</th><th>pnl/ct</th><th>maxDD</th></tr></thead><tbody></tbody></table></div><canvas id="btChart" style="margin-top:10px"></canvas></div>
-
-  <div class="card c6"><h2>Recorded data</h2><div id="data" class="muted">–</div></div>
-  <div class="card c6"><h2>Logs <select id="logSel"></select></h2><pre id="log"></pre></div>
+<section id="tab-data" hidden>
+  <div class="card c4"><h2>Recorded data</h2><div id="data" class="muted">–</div></div>
+  <div class="card c8"><h2>Logs <select id="logSel"></select> <span class="muted small">(last 200 lines, refreshes every 5 s)</span></h2><pre id="log"></pre></div>
+</section>
 </main>
 <script>
 const $ = s => document.querySelector(s);
-const fmt$ = v => (v==null||isNaN(v)) ? '–' : (v<0?'-':'+') + '$' + Math.abs(v).toFixed(2);
-const fmtp = v => v==null ? '–' : v.toFixed(3);
-const cls = v => v>0?'pos':(v<0?'neg':'');
-const ago = ms => { const s=Math.max(0,(Date.now()-ms)/1000); return s<90?`${s.toFixed(0)}s ago`:s<5400?`${(s/60).toFixed(0)}m ago`:`${(s/3600).toFixed(1)}h ago`; };
-const until = ms => { const s=(ms-Date.now())/1000; if(isNaN(s)) return '–'; if(s<0) return 'closed'; return s<3600?`${(s/60).toFixed(0)}m`:`${(s/3600).toFixed(1)}h`; };
-let runs=[], selected=null, eqChart=null, btChart=null, reportsCache=[];
+const fmt$ = v => (v==null||isNaN(v)) ? '–' : (v<0?'−':'+') + '$' + Math.abs(v).toFixed(2);
+const fmtp = v => v==null||isNaN(v) ? '–' : (+v).toFixed(3);
+const cls = v => v>0.000001?'pos':(v<-0.000001?'neg':'');
+const ago = ms => { if(!ms) return ''; const s=Math.max(0,(Date.now()-ms)/1000); return s<90?`${s.toFixed(0)}s ago`:s<5400?`${(s/60).toFixed(0)}m ago`:`${(s/3600).toFixed(1)}h ago`; };
+const until = ms => { const s=(ms-Date.now())/1000; if(!ms||isNaN(s)) return '–'; if(s<0) return 'closed'; return s<3600?`${(s/60).toFixed(0)}m`:s<86400?`${(s/3600).toFixed(1)}h`:`${(s/86400).toFixed(1)}d`; };
+const hz = s => s<3600?`${s/60} min`:`${s/3600} h`;
+let runs=[], selectedId=null, eqChart=null, btChart=null, reportsCache=[], scan=null;
 
 async function j(u){ const r=await fetch(u); return r.json(); }
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{ document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b)); document.querySelectorAll('main section').forEach(s=>s.hidden = s.id!=='tab-'+b.dataset.tab); });
 
 function verdict(r){
   const el=$('#verdict'); el.className='verdict';
-  if(!r){ el.textContent='No live runs found in data/state. Start one with: mbot paper --record data/live --maker --blend 0.5   or   mbot paper --strategy spread-maker --series KXHIGHNY ...'; return; }
-  const n=r.settled_count||0, pnl=r.settled_pnl||0, w=r.settled_wins||0;
-  const fresh=(Date.now()-r.updated_ms)<15000;
-  let txt=`${r.strategy} · ${r.mode.toUpperCase()} · ${fresh?'live':'stale'} · ${n} settled markets · realized ${fmt$(pnl)} · open ${fmt$(r.unrealized)}`;
-  if(n<30) { el.classList.add(''); txt+=`  —  ${n} settled markets is far too few to judge: per-market PnL noise is ~$50–70, so you need ~100+ markets before a total means anything.`; }
-  else if(pnl>0 && w/n>0.5) { el.classList.add('ok'); txt+=`  —  positive so far; still check the per-market t-stat in the backtest reports before believing it.`; }
-  else { el.classList.add('bad'); txt+=`  —  not profitable over this sample.`; }
-  el.textContent=txt;
+  if(!r){ el.textContent='No runs found in data/state. Start one: mbot paper --strategy spread-maker --series KXHIGHNY …'; return; }
+  const n=r.settled_count||0, pnl=r.settled_pnl||0, w=r.settled_wins||0, live=(Date.now()-r.updated_ms)<15000;
+  const isReal=r.mode==='LIVE';
+  let txt=`<b>${r.run_id}</b> — ${r.strategy}, ${isReal?'REAL MONEY':'paper (simulated fills on real books)'}, ${live?'updating':'stopped/stale'}. `;
+  if(isReal){ txt+=`Cash $${r.cash.toFixed(2)} vs $${r.initial_cash.toFixed(2)} at start (${fmt$(r.cash-r.initial_cash)}), open exposure ${fmt$(r.unrealized)}. `; }
+  else { txt+=`${n} markets settled: realized ${fmt$(pnl)} (${w} won), open positions marked ${fmt$(r.unrealized)}. `; }
+  if(n<30 && !isReal){ txt+=`<br><b>Verdict: no verdict yet.</b> Per-market PnL noise is ~$50–70 at these sizes, so ~100 settled markets are needed before the total means anything. Nothing measured so far — BTC 15-min fair value, weather forecasts — has shown an edge over the market after fees; the open question is thin-book market-making, which this run is testing.`; }
+  else if(pnl>0 && w/n>0.5){ el.classList.add('ok'); txt+=`<br><b>Positive so far.</b> Check the per-market t-stat under Research before trusting it.`; }
+  else { el.classList.add('bad'); txt+=`<br><b>Not profitable over this sample.</b>`; }
+  el.innerHTML=txt;
 }
 
-function render(r){
-  verdict(r);
-  if(!r) return;
-  $('#modeTag').textContent=`· ${r.mode} · started ${new Date(r.started_ms).toLocaleString()}`;
-  const eq=r.equity, ret=(eq-r.initial_cash)/r.initial_cash*100;
-  $('#equity').innerHTML=`<span class="${cls(eq-r.initial_cash)}">$${eq.toFixed(2)}</span><small>${ret>=0?'+':''}${ret.toFixed(2)}% on $${r.initial_cash}</small>`;
-  $('#equitySub').textContent=`cash $${r.cash.toFixed(2)} · free $${r.free_cash.toFixed(2)}`;
+function renderRuns(){
+  $('#runs').innerHTML=runs.map(r=>{ const live=(Date.now()-r.updated_ms)<15000; const d=r.equity-r.initial_cash; return `<div class="run ${r.run_id===selectedId?'sel':''}" data-id="${r.run_id}"><b>${r.run_id}</b>${r.mode==='LIVE'?'<span class="pill real">REAL</span>':'<span class="pill">paper</span>'}<span class="pill ${live?'live':'dead'}">${live?'● live':'○ '+ago(r.updated_ms)}</span><div class="n ${cls(d)}">${fmt$(d)}</div><div class="muted small">${r.strategy} · ${r.settled_count} settled · ${r.n_fills} fills · open ${fmt$(r.unrealized)}</div></div>`; }).join('')||'<div class="muted">no runs</div>';
+  document.querySelectorAll('.run').forEach(el=>el.onclick=()=>{ selectedId=el.dataset.id; if(eqChart){eqChart.destroy();eqChart=null;} render(); });
+}
+
+function render(){
+  const r=runs.find(x=>x.run_id===selectedId)||runs[0]; if(r) selectedId=r.run_id;
+  renderRuns(); verdict(r); if(!r) return;
+  $('#asof').textContent=`updated ${ago(r.updated_ms)}`;
+  const eq=r.equity, d=eq-r.initial_cash, ret=d/r.initial_cash*100;
+  $('#equity').innerHTML=`<span class="${cls(d)}">$${eq.toFixed(2)}</span><small>${ret>=0?'+':''}${ret.toFixed(2)}% on $${r.initial_cash.toFixed(0)}</small>`;
+  $('#equitySub').textContent=`cash $${r.cash.toFixed(2)} · free $${r.free_cash.toFixed(2)} · started ${new Date(r.started_ms).toLocaleString()}`;
   $('#settledPnl').innerHTML=`<span class="${cls(r.settled_pnl)}">${fmt$(r.settled_pnl)}</span>`;
-  $('#settledSub').textContent=`${r.settled_count} markets · ${r.settled_wins} won · ${r.settled_count? (100*r.settled_wins/r.settled_count).toFixed(0):0}% win`;
+  $('#settledSub').textContent=`${r.settled_count} markets · ${r.settled_wins} won · ${r.settled_count?(100*r.settled_wins/r.settled_count).toFixed(0):0}% win rate`;
   $('#unreal').innerHTML=`<span class="${cls(r.unrealized)}">${fmt$(r.unrealized)}</span>`;
-  $('#unrealSub').textContent=`${r.positions.filter(p=>p.yes_qty!==0).length} open positions`;
-  const q=r.queue||{};
-  $('#fills').innerHTML=`${r.n_fills}<small>${r.open_orders.length} resting</small>`;
-  $('#queueSub').textContent=`quotes rested ${q.rested||0} · avg ${Math.round(q.avg_ahead||0)} contracts ahead · reached front ${q.reached_front||0} · fills at price ${q.fills_at_price||0} · run through ${q.fills_through||0}`;
-  $('#freshness').textContent=`updated ${ago(r.updated_ms)}`;
+  $('#unrealSub').textContent=`${r.positions.filter(p=>p.yes_qty!==0).length} open positions · ${r.open_orders.length} resting orders`;
+  const q=r.queue||{}; const adverse=q.fills_through+q.fills_at_price>0? (100*q.fills_through/(q.fills_through+q.fills_at_price)).toFixed(0):'–';
+  $('#fills').innerHTML=`${r.n_fills}<small>fills · ${adverse}% run-through</small>`;
+  $('#queueSub').textContent=`${q.rested||0} quotes rested · avg ${Math.round(q.avg_ahead||0)} contracts ahead · ${q.reached_front||0} reached front · ${q.fills_at_price||0} filled at price · ${q.fills_through||0} filled by price running through`;
+  $('#freshness').textContent=(Date.now()-r.updated_ms)<15000?'● live':'○ stale';
 
-  // equity curve
   const pts=[]; let c=0; (r.settled||[]).forEach((s,i)=>{ c+=s.pnl; pts.push({x:i+1,y:+c.toFixed(2)}); });
-  drawLine('eqChart', eqChart, ch=>eqChart=ch, pts, 'settled PnL');
+  drawLine('eqChart', eqChart, ch=>eqChart=ch, pts, 'settled PnL', 'settled markets');
 
-  // strategy state
-  const s=r.strategy_state||{}; const st=$('#strat');
-  if(s.kind==='btc15m'){ st.innerHTML=`<div class="row"><span>spot <b>${s.spot?s.spot.toFixed(2):'–'}</b></span><span>σ <b>${(100*(s.sigma_annual||0)).toFixed(1)}%</b> ann.</span><span>basis <b>$${(s.basis||0).toFixed(2)}</b> (${s.basis_samples||0})</span><span>blend <b>${s.market_blend}</b></span><span>edge ≥ <b>${s.min_edge}</b></span><span>${s.mode}</span></div><div class="muted" style="margin-top:6px">evaluations ${s.stats?.evaluations||0} · signals ${s.stats?.signals||0} · orders ${s.stats?.orders||0}</div>`; }
-  else if(s.kind==='spread_maker'){ st.innerHTML=`<div class="row"><span>half-spread <b>${s.half_spread}</b></span><span>qty <b>${s.quote_qty}</b></span><span>max inv <b>${s.max_inventory}</b></span><span>orders <b>${s.orders}</b></span></div><div class="muted" style="margin-top:6px">series: ${(s.series||[]).join(', ')}</div>`; }
-  else st.textContent='–';
+  const s=r.strategy_state||{}; const st=$('#strat'); const ex=$('#stratExplain');
+  if(s.kind==='btc15m'){ st.innerHTML=`<span class="muted">spot</span><b>${s.spot?s.spot.toFixed(2):'–'}</b><span class="muted">realized vol</span><b>${(100*(s.sigma_annual||0)).toFixed(1)}% ann.</b><span class="muted">basis (BRTI−spot)</span><b>$${(s.basis||0).toFixed(2)} <span class="muted">(${s.basis_samples||0})</span></b><span class="muted">blend to market</span><b>${s.market_blend}</b><span class="muted">edge required</span><b>${s.min_edge}</b><span class="muted">mode</span><b>${s.mode}</b><span class="muted">signals / orders</span><b>${s.stats?.signals||0} / ${s.stats?.orders||0}</b>`; ex.innerHTML=`Prices each 15-minute BTC binary as a digital option on the live Coinbase price, then ${s.mode==='maker'?'rests quotes around fair value (zero maker fee)':'takes the touch when it disagrees with the market'}. <b>Finding:</b> at parity with the market over 10 days; taker cannot pay fees; maker sits behind ~3k contracts.`; }
+  else if(s.kind==='spread_maker'){ st.innerHTML=`<span class="muted">half spread</span><b>${s.half_spread}</b><span class="muted">quote size</span><b>${s.quote_qty}</b><span class="muted">max inventory</span><b>${s.max_inventory}</b><span class="muted">orders sent</span><b>${s.orders}</b><span class="muted">series</span><b class="small">${(s.series||[]).join(', ')}</b>`; ex.innerHTML=`Model-free market making: quotes mid ± ${s.half_spread} in thin daily-weather books, skewing quotes against inventory. Earns the spread if retail flow is uninformed; loses if price runs through the quotes (adverse selection). Watch <b>% run-through</b> and realized PnL per contract.`; }
+  else { st.textContent='–'; ex.textContent=''; }
 
-  // markets table
   const posBy={}; r.positions.forEach(p=>posBy[p.ticker]=p);
-  const rows=(s.markets||[]).map(m=>{ const b=r.books[m.ticker]||{}; const bid=b.bid?b.bid[0]:null, ask=b.ask?b.ask[0]:null; const fair=m.fair; let edge=null; if(fair!=null&&bid!=null&&ask!=null){ edge=Math.max(fair-ask, bid-fair); } const p=posBy[m.ticker]||{};
-    return `<tr><td>${m.ticker}</td><td>${until(m.close_ts_ms)}</td><td>${fmtp(bid)}${b.bid?`<span class="muted"> ×${Math.round(b.bid[1])}</span>`:''}</td><td>${fmtp(ask)}${b.ask?`<span class="muted"> ×${Math.round(b.ask[1])}</span>`:''}</td><td>${fmtp(fair)}</td><td class="${edge>0?'pos':''}">${edge==null?'–':(edge>=0?'+':'')+edge.toFixed(3)}</td><td>${fmtp(m.bid_quote)}</td><td>${fmtp(m.ask_quote)}</td><td class="${cls(p.yes_qty)}">${p.yes_qty?p.yes_qty.toFixed(0):''}</td><td class="${cls(p.mtm)}">${p.mtm!=null?fmt$(p.mtm):''}</td></tr>`; });
-  $('#mkts tbody').innerHTML=rows.join('')||'<tr><td colspan=10 class="muted">no markets tracked yet</td></tr>';
+  const rows=(s.markets||[]).map(m=>{ const b=r.books[m.ticker]||{}; const bid=b.bid?b.bid[0]:null, ask=b.ask?b.ask[0]:null; const fair=m.fair; let edge=null; if(fair!=null&&bid!=null&&ask!=null) edge=Math.max(fair-ask, bid-fair); const p=posBy[m.ticker]||{}; return {m,b,bid,ask,fair,edge,p}; }).sort((a,b)=>(a.m.close_ts_ms||0)-(b.m.close_ts_ms||0));
+  $('#mktCount').textContent=`${rows.length} markets`;
+  $('#mkts tbody').innerHTML=rows.map(({m,b,bid,ask,fair,edge,p})=>`<tr><td>${m.ticker}</td><td>${until(m.close_ts_ms)}</td><td>${fmtp(bid)}${b.bid?`<span class="muted"> ×${Math.round(b.bid[1])}</span>`:''}</td><td>${fmtp(ask)}${b.ask?`<span class="muted"> ×${Math.round(b.ask[1])}</span>`:''}</td><td>${bid!=null&&ask!=null?(ask-bid).toFixed(3):'–'}</td><td>${fmtp(fair)}</td><td class="${edge>0?'pos':''}">${edge==null?'–':(edge>=0?'+':'')+edge.toFixed(3)}</td><td>${fmtp(m.bid_quote)}</td><td>${fmtp(m.ask_quote)}</td><td class="${cls(p.yes_qty)}">${p.yes_qty?p.yes_qty.toFixed(0):''}</td><td class="${cls(p.mtm)}">${p.mtm!=null?fmt$(p.mtm):''}</td></tr>`).join('')||'<tr><td colspan=11 class="muted">no markets tracked yet</td></tr>';
 
-  $('#fillsT tbody').innerHTML=(r.fills||[]).slice(0,60).map(f=>`<tr><td>${new Date(f.ts_ms).toLocaleTimeString()}</td><td>${f.ticker}</td><td class="${f.action==='Buy'?'pos':'neg'}">${f.action==='Buy'?'buy YES':'sell YES'}</td><td>${f.yes_px.toFixed(3)}</td><td>${f.qty.toFixed(2)}</td><td>${f.fee.toFixed(2)}</td><td>${f.is_maker?'maker':'taker'}</td><td class="muted">${f.tag}</td></tr>`).join('')||'<tr><td colspan=8 class="muted">no fills yet</td></tr>';
-  $('#settledT tbody').innerHTML=(r.settled||[]).slice().reverse().slice(0,100).map(s=>`<tr><td>${s.ticker}</td><td>${s.result}</td><td class="${cls(s.pnl)}">${fmt$(s.pnl)}</td><td>${s.fees.toFixed(2)}</td><td>${s.n_fills}</td><td>${s.volume.toFixed(0)}</td></tr>`).join('')||'<tr><td colspan=6 class="muted">nothing settled yet</td></tr>';
+  $('#fillsT tbody').innerHTML=(r.fills||[]).slice(0,150).map(f=>`<tr><td>${new Date(f.ts_ms).toLocaleTimeString()}</td><td>${f.ticker}</td><td class="${f.action==='Buy'?'pos':'neg'}">${f.action==='Buy'?'buy YES':'sell YES'}</td><td>${f.yes_px.toFixed(3)}</td><td>${f.qty.toFixed(2)}</td><td>${f.fee.toFixed(2)}</td><td>${f.is_maker?'maker':'taker'}</td><td class="muted">${f.tag}</td></tr>`).join('')||'<tr><td colspan=8 class="muted">no fills yet</td></tr>';
   $('#ordersT tbody').innerHTML=(r.open_orders||[]).map(o=>`<tr><td>${o.ticker}</td><td class="${o.action==='Buy'?'pos':'neg'}">${o.action==='Buy'?'bid':'ask'}</td><td>${o.yes_px.toFixed(3)}</td><td>${o.remaining.toFixed(1)}</td><td>${Math.round(o.ahead)}</td><td class="muted">${o.tag}</td></tr>`).join('')||'<tr><td colspan=6 class="muted">none</td></tr>';
+  $('#settledT tbody').innerHTML=(r.settled||[]).slice().reverse().map(s=>`<tr><td>${s.ticker}</td><td>${s.result}</td><td class="${cls(s.pnl)}">${fmt$(s.pnl)}</td><td>${s.fees.toFixed(2)}</td><td>${s.n_fills}</td><td>${s.volume.toFixed(0)}</td><td class="${cls(s.pnl)}">${s.volume?(s.pnl/s.volume).toFixed(4):'–'}</td></tr>`).join('')||'<tr><td colspan=7 class="muted">nothing settled yet</td></tr>';
+  const rk=r.risk; $('#risk').innerHTML= rk ? `<span class="muted">at risk / cap</span><b>$${rk.at_risk.toFixed(2)} / $${rk.max_notional}</b><span class="muted">kill switch</span><b>${rk.halted?'<span class="neg">HALTED</span>':'armed at −$'+rk.max_loss}</b><span class="muted">orders rejected by limits</span><b>${rk.rejected}</b><span class="muted">dry run</span><b>${rk.dry_run}</b>` : '<span class="muted">paper run — no real risk</span>';
 }
 
-function drawLine(id, cur, set, pts, label){
+function drawLine(id, cur, set, pts, label, xlabel){
   const ctx=document.getElementById(id);
   if(cur){ cur.data.datasets[0].data=pts; cur.update('none'); return; }
-  set(new Chart(ctx,{type:'line',data:{datasets:[{label,data:pts,borderColor:'#6ea8fe',backgroundColor:'rgba(110,168,254,.15)',fill:true,pointRadius:0,tension:.2}]},
-    options:{animation:false,parsing:false,scales:{x:{type:'linear',ticks:{color:'#8b93a7'},grid:{color:'#262b36'},title:{display:true,text:'settled markets',color:'#8b93a7'}},y:{ticks:{color:'#8b93a7',callback:v=>'$'+v},grid:{color:'#262b36'}}},plugins:{legend:{display:false}}}}));
+  set(new Chart(ctx,{type:'line',data:{datasets:[{label,data:pts,borderColor:'#7aa9ff',backgroundColor:'rgba(122,169,255,.14)',fill:true,pointRadius:0,tension:.15}]},
+    options:{animation:false,parsing:false,maintainAspectRatio:false,scales:{x:{type:'linear',ticks:{color:'#8a93a8'},grid:{color:'#252b38'},title:{display:true,text:xlabel||'',color:'#8a93a8'}},y:{ticks:{color:'#8a93a8',callback:v=>'$'+v},grid:{color:'#252b38'}}},plugins:{legend:{display:false}}}}));
 }
 
-async function loadRuns(){
-  runs=await j('/api/runs');
-  const sel=$('#runSel'); const prev=sel.value;
-  sel.innerHTML=runs.map(r=>`<option value="${r.run_id}">${r.run_id} ${(Date.now()-r.updated_ms)<15000?'● live':'○'} ${fmt$(r.settled_pnl)}</option>`).join('');
-  if(runs.find(r=>r.run_id===prev)) sel.value=prev; else if(runs[0]) sel.value=runs[0].run_id;
-  selected=runs.find(r=>r.run_id===sel.value)||null;
-  render(selected);
+async function loadRuns(){ runs=await j('/api/runs'); runs=runs.filter(r=>r.run_id); render(); }
+
+let scanSort={k:'t_stat',dir:-1};
+function renderScan(){
+  if(!scan){ $('#scanMeta').textContent='no scan yet — run: mbot scan-bias'; return; }
+  const minN=+$('#scanMinN').value||0, scope=$('#scanScope').value;
+  let rows=(scan.rows||[]).filter(r=>r.n>=minN).filter(r=> scope==='all'?r.series==='ALL': scope==='cat'?r.series.startsWith('CAT:'):(r.series!=='ALL'&&!r.series.startsWith('CAT:')));
+  rows.sort((a,b)=>(a[scanSort.k]>b[scanSort.k]?1:-1)*scanSort.dir);
+  $('#scanMeta').textContent=`${scan.days} days · ${scan.n_samples} samples · ${new Date(scan.created_ms).toLocaleString()}`;
+  $('#scanT tbody').innerHTML=rows.slice(0,400).map(r=>{ const best=Math.max(r.ev_buy_yes,r.ev_buy_no); const strong=r.t_stat>=3&&r.n>=100; return `<tr class="${strong?'':''}"><td>${r.series.replace('CAT:','')}${strong?'<span class="pill live">candidate</span>':''}</td><td>${hz(r.horizon_secs)}</td><td>${r.bucket_lo.toFixed(2)}–${r.bucket_hi.toFixed(2)}</td><td>${r.n}</td><td>${r.avg_px.toFixed(3)}</td><td>${(100*r.yes_rate).toFixed(1)}%</td><td class="${cls(r.ev_buy_yes)}">${(r.ev_buy_yes>=0?'+':'')+r.ev_buy_yes.toFixed(3)}</td><td class="${cls(r.ev_buy_no)}">${(r.ev_buy_no>=0?'+':'')+r.ev_buy_no.toFixed(3)}</td><td class="${r.t_stat>=3?'pos':r.t_stat>=2?'warn':''}">${r.t_stat.toFixed(2)}</td></tr>`; }).join('')||'<tr><td colspan=9 class="muted">no rows match</td></tr>';
+  $('#seriesT tbody').innerHTML=(scan.series||[]).slice().sort((a,b)=>a.brier_market-b.brier_market).map(s=>`<tr><td>${s.series}</td><td class="muted">${s.category}</td><td class="muted">${s.title}</td><td>${s.markets}</td><td>${s.samples}</td><td>${isNaN(s.brier_market)?'–':s.brier_market.toFixed(4)}</td></tr>`).join('');
+  const cands=rows.filter(r=>r.t_stat>=3&&r.n>=100&&r.series!=='ALL'&&!r.series.startsWith('CAT:'));
+  $('#researchSummary').innerHTML=`Tested so far: <b>BTC 15-min fair value</b> (parity with market; taker loses to fees; maker queues behind ~3k contracts), <b>weather forecast model</b> (market's Brier beats it), <b>thin-book weather market-making</b> (running in paper). The bias scan below asks a broader question — across ${(scan.series||[]).length} liquid series and ${scan.n_samples} price samples, where does the crowd systematically misprice? <b>${cands.length} bucket(s)</b> currently pass the bar (t ≥ 3, n ≥ 100). Anything that passes gets a strategy and a paper run; anything that doesn't is noise.`;
 }
+document.querySelectorAll('#scanT th').forEach(th=>th.onclick=()=>{ const k=th.dataset.k; if(!k) return; scanSort= scanSort.k===k?{k,dir:-scanSort.dir}:{k,dir:-1}; document.querySelectorAll('#scanT th').forEach(x=>x.classList.toggle('sorted',x===th)); renderScan(); });
+$('#scanMinN').oninput=renderScan; $('#scanScope').onchange=renderScan;
 
 async function loadReports(){
-  reportsCache=await j('/api/reports');
-  $('#reportsT tbody').innerHTML=reportsCache.map((r,i)=>{ const p=r.params||{}; return `<tr class="clickable" data-i="${i}"><td>${new Date(r.created_ms).toLocaleString()}</td><td>${p.series||''}</td><td>${p.from||'all'}→${p.to||'all'}</td><td>${p.maker?'maker':'taker'} ${p.mode||''} ${p.latency_ms||''}ms${p.maker?` q${p.maker_touch_fill_prob}`:''}</td><td>${p.edge}</td><td>${p.vol_source||'realized'}</td><td>${p.blend??0}</td><td>${r.markets_traded}/${r.markets_seen}</td><td>${r.n_fills}</td><td class="${cls(r.net_pnl)}">${fmt$(r.net_pnl)}</td><td>${r.fees.toFixed(0)}</td><td>${(100*r.win_rate).toFixed(0)}</td><td class="${cls(r.pnl_per_contract)}">${r.pnl_per_contract.toFixed(4)}</td><td>${r.max_drawdown.toFixed(0)}</td></tr>`; }).join('')||'<tr><td colspan=14 class="muted">no reports yet — run mbot backtest</td></tr>';
-  document.querySelectorAll('#reportsT tr.clickable').forEach(tr=>tr.onclick=async()=>{ const r=reportsCache[+tr.dataset.i]; const full=await j('/api/report?name='+encodeURIComponent(r._file)); const pts=[]; let c=0; (full.markets||[]).forEach((m,i)=>{c+=m.pnl; pts.push({x:i+1,y:+c.toFixed(2)});}); drawLine('btChart', btChart, ch=>btChart=ch, pts, r._file); });
+  const all=await j('/api/reports');
+  const scans=all.filter(r=>r.kind==='bias-scan'); scans.sort((a,b)=>b.created_ms-a.created_ms);
+  if(scans[0]){ scan=await j('/api/report?name='+encodeURIComponent(scans[0]._file)); } renderScan();
+  reportsCache=all.filter(r=>r.kind!=='bias-scan');
+  $('#reportsT tbody').innerHTML=reportsCache.map((r,i)=>{ const p=r.params||{}; return `<tr class="clickable" data-i="${i}"><td>${new Date(r.created_ms).toLocaleDateString()}</td><td>${p.series||''}</td><td>${(p.from||'all').slice(5)}→${(p.to||'all').slice(5)}</td><td>${p.maker?'maker q'+p.maker_touch_fill_prob:'taker'}</td><td>${p.edge}</td><td>${p.blend??0}</td><td>${r.markets_traded}</td><td class="${cls(r.net_pnl)}">${fmt$(r.net_pnl)}</td><td>${r.fees.toFixed(0)}</td><td>${(100*r.win_rate).toFixed(0)}</td><td class="${cls(r.pnl_per_contract)}">${r.pnl_per_contract.toFixed(4)}</td><td>${r.max_drawdown.toFixed(0)}</td></tr>`; }).join('')||'<tr><td colspan=12 class="muted">no backtests yet</td></tr>';
+  document.querySelectorAll('#reportsT tr.clickable').forEach(tr=>tr.onclick=async()=>{ const r=reportsCache[+tr.dataset.i]; const full=await j('/api/report?name='+encodeURIComponent(r._file)); const pts=[]; let c=0; (full.markets||[]).forEach((m,i)=>{c+=m.pnl; pts.push({x:i+1,y:+c.toFixed(2)});}); if(btChart){btChart.destroy();btChart=null;} drawLine('btChart', btChart, ch=>btChart=ch, pts, r._file, 'settled markets'); });
 }
 
-async function loadData(){
-  const d=await j('/api/data');
-  $('#data').innerHTML=d.map(root=>`<div style="margin-bottom:8px"><b>${root.root}</b><table>${Object.entries(root.kinds).map(([k,v])=>`<tr><td>${k}</td><td>${v.files} files</td><td>${(v.bytes/1048576).toFixed(1)} MB</td><td class="muted">${v.newest_ms?ago(v.newest_ms):''}</td></tr>`).join('')}</table></div>`).join('')||'no data dirs';
-}
-
-async function loadLogs(){
-  const files=await j('/api/logs'); const sel=$('#logSel'); const prev=sel.value;
-  sel.innerHTML=files.map(f=>`<option value="${f.file}">${f.file} (${(f.bytes/1024).toFixed(0)} KB)</option>`).join('');
-  if(files.find(f=>f.file===prev)) sel.value=prev;
-  if(sel.value){ const t=await j('/api/logs?file='+encodeURIComponent(sel.value)+'&lines=150'); $('#log').textContent=(t.lines||[]).join('\n'); const pre=$('#log'); pre.scrollTop=pre.scrollHeight; }
-}
-
-$('#runSel').onchange=()=>{ selected=runs.find(r=>r.run_id===$('#runSel').value)||null; if(eqChart){eqChart.destroy(); eqChart=null;} render(selected); };
+async function loadData(){ const d=await j('/api/data'); $('#data').innerHTML=d.map(root=>`<div style="margin-bottom:10px"><b>${root.root}</b><table>${Object.entries(root.kinds).map(([k,v])=>`<tr><td>${k}</td><td>${v.files} files</td><td>${(v.bytes/1048576).toFixed(1)} MB</td><td class="muted">${v.newest_ms?ago(v.newest_ms):''}</td></tr>`).join('')}</table></div>`).join('')||'no data dirs'; }
+async function loadLogs(){ const files=await j('/api/logs'); const sel=$('#logSel'); const prev=sel.value; sel.innerHTML=files.map(f=>`<option value="${f.file}">${f.file} (${(f.bytes/1024).toFixed(0)} KB)</option>`).join(''); if(files.find(f=>f.file===prev)) sel.value=prev; if(sel.value){ const t=await j('/api/logs?file='+encodeURIComponent(sel.value)+'&lines=200'); $('#log').textContent=(t.lines||[]).join('\n'); const pre=$('#log'); pre.scrollTop=pre.scrollHeight; } }
 $('#logSel').onchange=loadLogs;
 setInterval(()=>{ $('#clock').textContent=new Date().toLocaleString(); },1000);
 loadRuns(); loadReports(); loadData(); loadLogs();
-setInterval(loadRuns,2000); setInterval(loadLogs,5000); setInterval(loadData,30000); setInterval(loadReports,30000);
+setInterval(loadRuns,2000); setInterval(loadLogs,5000); setInterval(loadData,30000); setInterval(loadReports,60000);
 </script>
 </body>
 </html>

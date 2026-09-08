@@ -3,6 +3,7 @@ mod cmd_calibrate;
 mod cmd_dashboard;
 mod cmd_history;
 mod cmd_live;
+mod cmd_scan;
 mod cmd_tools;
 
 use anyhow::Result;
@@ -23,6 +24,8 @@ enum Cmd {
     Backtest(cmd_backtest::Args),
     /// Model-vs-market calibration: Brier scores and calibration tables, no trading.
     Calibrate(cmd_calibrate::Args),
+    /// Exchange-wide bias scan: where does price ≠ realized frequency after fees, across many series?
+    ScanBias(cmd_scan::Args),
     /// Record live market data (Kalshi books/trades, Coinbase ref prices, Polymarket books) to Parquet.
     Collect(cmd_live::CollectArgs),
     /// Paper-trade a strategy on live data with simulated fills (no orders sent).
@@ -54,6 +57,7 @@ async fn main() -> Result<()> {
         Cmd::FetchHistory(a) => cmd_history::run(a).await,
         Cmd::Backtest(a) => cmd_backtest::run(a).await,
         Cmd::Calibrate(a) => cmd_calibrate::run(a).await,
+        Cmd::ScanBias(a) => cmd_scan::run(a).await,
         Cmd::Collect(a) => cmd_live::collect(a).await,
         Cmd::Paper(a) => cmd_live::paper(a).await,
         Cmd::Live(a) => cmd_live::live(a).await,
