@@ -37,6 +37,13 @@ pub struct SpreadMakerConfig {
     pub requote_ms: i64,
     /// Max simultaneous markets quoted.
     pub max_markets: usize,
+    /// Only quote when the market closes within this many seconds (0 = no limit).
+    /// The favourite-maker edge lives in the final minutes, where the outcome is
+    /// nearly settled and the spread is the whole return.
+    pub max_tau_secs: i64,
+    /// Quote only the bid (buy the favourite), never the offer. Taking the other side
+    /// of a near-certain favourite is how a maker gets run over.
+    pub bid_only: bool,
 }
 
 impl Default for SpreadMakerConfig {
@@ -53,6 +60,8 @@ impl Default for SpreadMakerConfig {
             max_price: 0.95,
             requote_ms: 2000,
             max_markets: 200,
+            max_tau_secs: 0,
+            bid_only: false,
         }
     }
 }
@@ -111,7 +120,8 @@ impl SpreadMaker {
     fn quote(&mut self, ticker: &str, ctx: &mut dyn Context) {
         let now = ctx.now_ms();
         let Some(m) = self.mkts.get(ticker).cloned() else { return };
-        if m.close_ts_ms > 0 && (m.close_ts_ms - now) / 1000 < self.cfg.min_tau_secs {
+        let secs_left = if m.close_ts_ms > 0 { (m.close_ts_ms - now) / 1000 } else { i64::MAX };
+        if secs_left < self.cfg.min_tau_secs || (self.cfg.max_tau_secs > 0 && secs_left > self.cfg.max_tau_secs) {
             self.cancel_all(ticker, ctx);
             return;
         }
@@ -151,7 +161,7 @@ impl SpreadMaker {
             }
         }
         let mut want_ask = None;
-        if inv > -self.cfg.max_inventory {
+        if !self.cfg.bid_only && inv > -self.cfg.max_inventory {
             let raw = Fp::from_f64(fair + self.cfg.half_spread);
             let mut px = raw.round_up_to(kalshi_tick(raw));
             if px <= bid {
