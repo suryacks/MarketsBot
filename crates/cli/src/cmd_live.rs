@@ -230,7 +230,12 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
 
     // NWS observations for weather series
     if a.nws_obs {
-        let stations: Vec<String> = a.series.iter().filter_map(|s| mb_coinbase::nws::station_for(s)).map(String::from).collect();
+        let mut stations: Vec<String> = a.series.iter().filter_map(|s| mb_coinbase::nws::station_for(s)).map(String::from).collect();
+        if a.series.iter().any(|s| s == "KXRAIN") {
+            stations.extend(mb_coinbase::nws::RAIN_STATIONS.iter().map(|(_, s)| s.to_string()));
+        }
+        stations.sort();
+        stations.dedup();
         if !stations.is_empty() {
             let txc = tx.clone();
             tokio::spawn(async move {

@@ -63,9 +63,33 @@ pub struct WeatherLock {
     markets: HashMap<String, Mkt>,
     /// station -> (local day key, running max)
     run_max: HashMap<String, (i64, f64)>,
+    /// station -> (local day key, mm of measurable precipitation observed today)
+    rain: HashMap<String, (i64, f64)>,
+    /// KXRAIN ticker -> (station, close_ts_ms)
+    rain_markets: HashMap<String, (String, i64)>,
     traded: HashSet<String>,
     pub orders: u64,
     pub decided: u64,
+}
+
+fn rain_station_offset(station: &str) -> i32 {
+    ["ATL", "AUS", "BOS", "CHI", "DAL", "DC", "DEN", "EWR", "HOU", "LAX", "LV", "MIA", "MIN", "NOLA", "NYC", "OKC", "PHIL", "PHX", "SATX", "SEA", "SFO", "TTN"]
+        .iter()
+        .filter_map(|c| rain_station(c))
+        .find(|(s, _)| *s == station)
+        .map(|(_, o)| o)
+        .unwrap_or(-5)
+}
+
+/// KXRAIN city → (NWS station, UTC offset of the local day)
+fn rain_station(city: &str) -> Option<(&'static str, i32)> {
+    Some(match city {
+        "ATL" => ("KATL", -4), "AUS" => ("KAUS", -5), "BOS" => ("KBOS", -4), "CHI" => ("KORD", -5), "DAL" => ("KDFW", -5), "DC" => ("KDCA", -4),
+        "DEN" => ("KDEN", -6), "EWR" => ("KEWR", -4), "HOU" => ("KIAH", -5), "LAX" => ("KLAX", -7), "LV" => ("KLAS", -7), "MIA" => ("KMIA", -4),
+        "MIN" => ("KMSP", -5), "NOLA" => ("KMSY", -5), "NYC" => ("KNYC", -4), "OKC" => ("KOKC", -5), "PHIL" => ("KPHL", -4), "PHX" => ("KPHX", -7),
+        "SATX" => ("KSAT", -5), "SEA" => ("KSEA", -7), "SFO" => ("KSFO", -7), "TTN" => ("KTTN", -4),
+        _ => return None,
+    })
 }
 
 impl WeatherLock {
@@ -74,9 +98,50 @@ impl WeatherLock {
             cfg,
             markets: HashMap::new(),
             run_max: HashMap::new(),
+            rain: HashMap::new(),
+            rain_markets: HashMap::new(),
             traded: HashSet::new(),
             orders: 0,
             decided: 0,
+        }
+    }
+
+    /// Rain markets decided YES by measurable precipitation today at their station.
+    fn evaluate_rain(&mut self, station: &str, ctx: &mut dyn Context) {
+        let Some(&(day, mm)) = self.rain.get(station) else { return };
+        if mm < 0.25 {
+            return; // < 0.01" — not measurable
+        }
+        let now = ctx.now_ms();
+        let tickers: Vec<String> = self
+            .rain_markets
+            .iter()
+            .filter(|(t, (st, close))| st == station && !self.traded.contains(*t) && *close > now)
+            .map(|(t, _)| t.clone())
+            .collect();
+        for t in tickers {
+            let (_, close) = self.rain_markets[&t];
+            let city = t.rsplit('-').next().unwrap_or("");
+            let off = rain_station(city).map(|(_, o)| o).unwrap_or(0) as i64;
+            let market_day = (close / 1000 + off * 3600 - 6 * 3600).div_euclid(86_400);
+            if market_day != day {
+                continue;
+            }
+            self.decided += 1;
+            let Some(book) = ctx.book(&t) else { continue };
+            let Some((ask, aq)) = book.best_ask() else { continue };
+            let edge = 1.0 - ask.to_f64() - ctx.fee_model(&t).fee_per_contract(ask, false);
+            if edge < self.cfg.min_edge {
+                continue;
+            }
+            let qty = (self.cfg.stake / ask.to_f64().max(0.02)).floor().min(aq.to_f64());
+            if qty < 1.0 {
+                continue;
+            }
+            tracing::info!(ticker = %t, station, precip_mm = mm, ask = %ask, "RAIN LOCK trade");
+            ctx.submit(OrderRequest::buy_yes(&t, ask, Fp::from_int(qty as i64), Tif::Ioc).tagged("rain_lock_yes"));
+            self.traded.insert(t);
+            self.orders += 1;
         }
     }
 
@@ -157,11 +222,27 @@ impl Strategy for WeatherLock {
     fn on_event(&mut self, ev: &MarketEvent, ctx: &mut dyn Context) {
         match ev {
             MarketEvent::Market(m) => {
-                if self.cfg.stations.contains_key(&m.series)
+                if m.series == "KXRAIN" {
+                    let city = m.ticker.rsplit('-').next().unwrap_or("");
+                    if let Some((st, _)) = rain_station(city) {
+                        self.rain_markets.insert(m.ticker.clone(), (st.to_string(), m.close_ts_ms));
+                    }
+                } else if self.cfg.stations.contains_key(&m.series)
                     && let Some((lo, hi)) = Self::parse_market(m)
                 {
                     self.markets.insert(m.ticker.clone(), Mkt { series: m.series.clone(), close_ts_ms: m.close_ts_ms, lo, hi });
                 }
+            }
+            MarketEvent::Ref(r) if r.source == "nws" && r.symbol.ends_with(":precip_mm") => {
+                let station = r.symbol.trim_end_matches(":precip_mm").to_string();
+                let off = rain_station_offset(&station);
+                let day = (r.ts_ms / 1000 + off as i64 * 3600).div_euclid(86_400);
+                let e = self.rain.entry(station.clone()).or_insert((day, 0.0));
+                if e.0 != day {
+                    *e = (day, 0.0);
+                }
+                e.1 += r.px; // accumulate last-hour mm (obs are ~hourly; specials may double count slightly — conservative direction is fine)
+                self.evaluate_rain(&station, ctx);
             }
             MarketEvent::Ref(r) if r.source == "nws" => {
                 // which series does this station serve? (day key needs the series' offset)
@@ -186,13 +267,16 @@ impl Strategy for WeatherLock {
             }
             MarketEvent::Settlement { ticker, .. } => {
                 self.markets.remove(ticker);
+                self.rain_markets.remove(ticker);
             }
             _ => {}
         }
     }
     fn snapshot(&self) -> serde_json::Value {
         serde_json::json!({"kind": "weather_lock", "mode": "taker", "orders": self.orders, "decided_moments": self.decided,
-                           "series": self.cfg.stations.keys().cloned().collect::<Vec<_>>(),
+                           "series": self.cfg.stations.keys().cloned().chain(std::iter::once("KXRAIN".to_string())).collect::<Vec<_>>(),
+                           "rain_markets": self.rain_markets.len(),
+                           "rain_today_mm": self.rain.iter().filter(|(_, (_, mm))| *mm > 0.0).map(|(s, (_, mm))| serde_json::json!({"station": s, "mm": mm})).collect::<Vec<_>>(),
                            "running_max": self.run_max.iter().map(|(s, (d, m))| serde_json::json!({"station": s, "day": d, "max_f": m})).collect::<Vec<_>>(),
                            "markets": self.markets.iter().map(|(t, m)| serde_json::json!({"ticker": t, "series": m.series, "close_ts_ms": m.close_ts_ms, "lo": m.lo, "hi": m.hi})).collect::<Vec<_>>()})
     }

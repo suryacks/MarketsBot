@@ -25,6 +25,17 @@ pub fn station_for(series: &str) -> Option<&'static str> {
     })
 }
 
+/// KXRAIN city code (ticker suffix) → NWS station id.
+pub const RAIN_STATIONS: &[(&str, &str)] = &[
+    ("ATL", "KATL"), ("AUS", "KAUS"), ("BOS", "KBOS"), ("CHI", "KORD"), ("DAL", "KDFW"), ("DC", "KDCA"), ("DEN", "KDEN"), ("EWR", "KEWR"),
+    ("HOU", "KIAH"), ("LAX", "KLAX"), ("LV", "KLAS"), ("MIA", "KMIA"), ("MIN", "KMSP"), ("NOLA", "KMSY"), ("NYC", "KNYC"), ("OKC", "KOKC"),
+    ("PHIL", "KPHL"), ("PHX", "KPHX"), ("SATX", "KSAT"), ("SEA", "KSEA"), ("SFO", "KSFO"), ("TTN", "KTTN"),
+];
+
+pub fn rain_station(city: &str) -> Option<&'static str> {
+    RAIN_STATIONS.iter().find(|(c, _)| *c == city).map(|(_, s)| *s)
+}
+
 pub async fn run(stations: Vec<String>, every: Duration, tx: mpsc::Sender<MarketEvent>) -> Result<()> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -40,21 +51,20 @@ pub async fn run(stations: Vec<String>, every: Duration, tx: mpsc::Sender<Market
                     if let Ok(v) = r.json::<serde_json::Value>().await {
                         let p = &v["properties"];
                         let ts = p["timestamp"].as_str().unwrap_or("").to_string();
-                        let temp_c = p["temperature"]["value"].as_f64();
-                        if let Some(c) = temp_c
-                            && last_seen.get(s) != Some(&ts)
-                        {
+                        if last_seen.get(s) != Some(&ts) {
                             last_seen.insert(s.clone(), ts.clone());
                             let ts_ms = chrono::DateTime::parse_from_rfc3339(&ts).map(|d| d.timestamp_millis()).unwrap_or_else(|_| chrono::Utc::now().timestamp_millis());
-                            let f = c * 9.0 / 5.0 + 32.0;
+                            if let Some(c) = p["temperature"]["value"].as_f64() {
+                                let _ = tx
+                                    .send(MarketEvent::Ref(RefPrice { source: SOURCE.into(), symbol: s.clone(), ts_ms, px: c * 9.0 / 5.0 + 32.0, avg_60s: None }))
+                                    .await;
+                            }
+                            // precipitation: mm in the last hour (null → 0), plus a rain flag from the present-weather text
+                            let mm = p["precipitationLastHour"]["value"].as_f64().unwrap_or(0.0).max(0.0);
+                            let text = p["textDescription"].as_str().unwrap_or("").to_lowercase();
+                            let raining = ["rain", "drizzle", "thunderstorm", "showers"].iter().any(|w| text.contains(w));
                             let _ = tx
-                                .send(MarketEvent::Ref(RefPrice {
-                                    source: SOURCE.into(),
-                                    symbol: s.clone(),
-                                    ts_ms,
-                                    px: f,
-                                    avg_60s: None,
-                                }))
+                                .send(MarketEvent::Ref(RefPrice { source: SOURCE.into(), symbol: format!("{s}:precip_mm"), ts_ms, px: mm, avg_60s: Some(if raining { 1.0 } else { 0.0 }) }))
                                 .await;
                         }
                     }
