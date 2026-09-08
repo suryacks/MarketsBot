@@ -91,6 +91,12 @@ pub struct MarketInfo {
     pub yes_bid: Option<Fp>,
     pub yes_ask: Option<Fp>,
     pub volume: Fp,
+    /// Kalshi category of the series (e.g. "Economics"); empty if unknown.
+    #[serde(default)]
+    pub category: String,
+    /// YES price at (or shortly after) market open, if known.
+    #[serde(default)]
+    pub open_px: Option<Fp>,
 }
 
 impl MarketInfo {

@@ -41,6 +41,13 @@ pub struct FeedArgs {
     /// REST polling interval when no Kalshi API keys are configured, ms
     #[arg(long, default_value_t = 1000)]
     pub poll_ms: u64,
+    /// Follow every open market on the exchange (touch via the ticker channel, no full books).
+    /// Needed for category-scoped rules; use --category to restrict.
+    #[arg(long)]
+    pub all_open: bool,
+    /// With --all-open: only markets whose series is in these categories (repeatable)
+    #[arg(long = "category")]
+    pub categories: Vec<String>,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -131,20 +138,45 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
 
     // Kalshi: discovery + (ws | poll)
     let (wtx, wrx) = watch::channel::<Vec<String>>(Vec::new());
-    if authenticated {
-        let ws = KalshiWs::from_env()?;
-        let txc = tx.clone();
-        let mut channels = vec![Channel::OrderbookDelta, Channel::Trade, Channel::Ticker];
-        if with_fills {
-            channels.push(Channel::Fill);
+    if a.all_open {
+        // exchange-wide touch feed: ticker + trade channels without a ticker list
+        if authenticated {
+            let ws = KalshiWs::from_env()?;
+            let txc = tx.clone();
+            let (_static_tx, static_rx) = watch::channel::<Vec<String>>(Vec::new());
+            let mut channels = vec![Channel::Ticker, Channel::Trade];
+            if with_fills {
+                channels.push(Channel::Fill);
+            }
+            tokio::spawn(async move {
+                if let Err(e) = ws.run_dynamic(&channels, static_rx, txc).await {
+                    warn!(error = %e, "kalshi ws (all markets) task ended");
+                }
+            });
         }
+        let client = client.clone();
+        let txc = tx.clone();
+        let cats = a.categories.clone();
+        let discover = Duration::from_secs(a.discover_secs.max(30));
         tokio::spawn(async move {
-            if let Err(e) = ws.run_dynamic(&channels, wrx, txc).await {
-                warn!(error = %e, "kalshi ws task ended");
+            if let Err(e) = discovery_all_open(client, cats, txc, discover).await {
+                warn!(error = %e, "kalshi all-open discovery ended");
             }
         });
-    }
-    {
+    } else {
+        if authenticated {
+            let ws = KalshiWs::from_env()?;
+            let txc = tx.clone();
+            let mut channels = vec![Channel::OrderbookDelta, Channel::Trade, Channel::Ticker];
+            if with_fills {
+                channels.push(Channel::Fill);
+            }
+            tokio::spawn(async move {
+                if let Err(e) = ws.run_dynamic(&channels, wrx, txc).await {
+                    warn!(error = %e, "kalshi ws task ended");
+                }
+            });
+        }
         let client = client.clone();
         let series = a.series.clone();
         let txc = tx.clone();
@@ -343,6 +375,114 @@ async fn discovery_loop(
         }
 
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Exchange-wide discovery: every open market (paginated), category from the series
+/// list, open price from the first hourly candle after open (only for markets that
+/// opened more than an hour ago). Emits Market events for new markets and Settlement
+/// for tracked markets that resolve.
+async fn discovery_all_open(client: KalshiClient, categories: Vec<String>, tx: mpsc::Sender<MarketEvent>, every: Duration) -> Result<()> {
+    // series -> category
+    let mut cat_of: HashMap<String, String> = HashMap::new();
+    let cats: Vec<String> = if categories.is_empty() {
+        vec!["Crypto", "Climate and Weather", "Economics", "Financials", "Sports", "Politics", "Elections", "Entertainment", "Mentions", "Science and Technology", "Companies", "World", "Commodities", "Health"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    } else {
+        categories.clone()
+    };
+    for c in &cats {
+        if let Ok(ss) = client.list_series(Some(c)).await {
+            for s in ss {
+                cat_of.insert(s.ticker, c.clone());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    info!(series = cat_of.len(), categories = cats.len(), "all-open discovery: series→category map");
+    let mut known: HashMap<String, mb_core::MarketInfo> = HashMap::new();
+    let mut settled: HashSet<String> = HashSet::new();
+    loop {
+        let mut cursor: Option<String> = None;
+        let mut seen_now: HashSet<String> = HashSet::new();
+        loop {
+            let q = MarketsQuery {
+                status: Some("open".into()),
+                limit: Some(1000),
+                ..Default::default()
+            };
+            let r = match client.get_markets(&q, cursor.as_deref()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(error = %e, "all-open markets page failed");
+                    break;
+                }
+            };
+            let n = r.markets.len();
+            for m in r.markets {
+                let mut info = m.to_info();
+                let Some(cat) = cat_of.get(&info.series) else { continue };
+                if !categories.is_empty() && !categories.contains(cat) {
+                    continue;
+                }
+                info.category = cat.clone();
+                seen_now.insert(info.ticker.clone());
+                if known.contains_key(&info.ticker) {
+                    continue;
+                }
+                // open price: first hourly candle after open (cheap, once per market)
+                let now_s = chrono::Utc::now().timestamp();
+                if info.open_ts_ms > 0 && now_s - info.open_ts_ms / 1000 > 3600 {
+                    let o = info.open_ts_ms / 1000;
+                    if let Ok(cs) = client.get_candlesticks(&info.series, &info.ticker, o, o + 6 * 3600, 60).await {
+                        if let Some(c) = cs.iter().find(|c| c.price.close_dollars.is_some() || c.yes_bid.close_dollars.is_some()) {
+                            info.open_px = match (c.yes_bid.close_dollars, c.yes_ask.close_dollars) {
+                                (Some(b), Some(a)) if b.is_positive() && a < Fp::ONE => Some(Fp((b.0 + a.0) / 2)),
+                                _ => c.price.close_dollars,
+                            };
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(120)).await;
+                }
+                known.insert(info.ticker.clone(), info.clone());
+                let _ = tx.send(MarketEvent::Market(info)).await;
+            }
+            cursor = if r.cursor.is_empty() || n == 0 { None } else { Some(r.cursor) };
+            if cursor.is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        info!(open_markets = seen_now.len(), tracked = known.len(), "all-open discovery pass");
+        // settlement checks for tracked markets that dropped out of the open set past close
+        let now = chrono::Utc::now().timestamp_millis();
+        let past: Vec<String> = known
+            .iter()
+            .filter(|(t, m)| !seen_now.contains(*t) && m.close_ts_ms > 0 && now > m.close_ts_ms && !settled.contains(*t))
+            .map(|(t, _)| t.clone())
+            .take(50)
+            .collect();
+        for t in past {
+            if let Ok(m) = client.get_market(&t).await {
+                let info = m.to_info();
+                if let Some(r) = info.settled_outcome() {
+                    settled.insert(t.clone());
+                    let _ = tx
+                        .send(MarketEvent::Settlement {
+                            venue: Venue::Kalshi,
+                            ticker: t.clone(),
+                            ts_ms: now,
+                            result: r,
+                        })
+                        .await;
+                    known.remove(&t);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        }
+        tokio::time::sleep(every).await;
     }
 }
 

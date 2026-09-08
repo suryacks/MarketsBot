@@ -128,6 +128,8 @@ impl MarketRow {
             yes_bid: None,
             yes_ask: None,
             volume: Fp(self.volume),
+            category: String::new(),
+            open_px: None,
         }
     }
 }

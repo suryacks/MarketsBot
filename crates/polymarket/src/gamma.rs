@@ -129,6 +129,8 @@ impl GammaMarket {
             yes_bid: self.best_bid.map(mb_core::Fp::from_f64),
             yes_ask: self.best_ask.map(mb_core::Fp::from_f64),
             volume: mb_core::Fp::from_f64(self.volume24hr.unwrap_or(0.0)),
+            category: String::new(),
+            open_px: None,
         })
     }
 }

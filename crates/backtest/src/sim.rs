@@ -276,6 +276,22 @@ impl SimExchange {
                 }
                 self.books.entry(ticker.clone()).or_default().set_level(*side, *px, *qty);
             }
+            // Touch-only feed (ticker channel): keep a one-level book so taker strategies can see
+            // the touch. Assumed depth 100 contracts — fine for $2 stakes, not for size.
+            MarketEvent::Ticker { ticker, ts_ms, yes_bid, yes_ask, .. } => {
+                let synthetic = self.books.get(ticker).map(|b| b.bids.len() <= 1 && b.asks.len() <= 1).unwrap_or(true);
+                if synthetic && self.cfg.mode == FillMode::Book {
+                    let b = self.books.entry(ticker.clone()).or_default();
+                    b.clear();
+                    if let Some(p) = yes_bid.filter(|p| p.is_positive()) {
+                        b.bids.insert(p, Fp::from_int(100));
+                    }
+                    if let Some(p) = yes_ask.filter(|p| p.is_positive() && *p < Fp::ONE) {
+                        b.asks.insert(p, Fp::from_int(100));
+                    }
+                    b.ts_ms = *ts_ms;
+                }
+            }
             MarketEvent::Trade(t) => {
                 if self.cfg.mode == FillMode::Book {
                     Self::remember(&mut self.recent_trades, (self.now_ms, t.ticker.clone(), t.yes_px, t.qty));

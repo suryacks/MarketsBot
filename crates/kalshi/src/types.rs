@@ -71,6 +71,8 @@ impl Market {
             yes_bid: self.yes_bid_dollars,
             yes_ask: self.yes_ask_dollars,
             volume: self.volume_fp.unwrap_or(Fp::ZERO),
+            category: String::new(),
+            open_px: None,
         }
     }
 }
