@@ -1,0 +1,15 @@
+# Live variant sized for a $14 account (see favorite_maker.toml for the rationale).
+# 2 contracts a quote at ~85c is ~$1.70 per fill; max inventory 5 caps one market near $4.
+series = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"]
+min_price = 0.74
+max_price = 0.93
+max_tau_secs = 300
+min_tau_secs = 20
+bid_only = true
+half_spread = 0.01
+skew_per_contract = 0.002
+quote_qty = 2.0
+max_inventory = 5.0
+max_market_spread = 0.06
+requote_ms = 1000
+max_markets = 8
