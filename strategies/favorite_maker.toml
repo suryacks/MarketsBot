@@ -6,7 +6,14 @@
 # return is the spread you avoid paying, collected on outcomes that are already nearly decided.
 #
 # Independently reported by a live trader (~1,300 fills, real money) and consistent with our
-# own tape backtest (t = 2.27). The open question is queue position, which the paper run measures.
+# own tape backtest (t = 2.27). The open question was queue position.
+#
+# VERDICT: NOT DEPLOYED. The paper run answered it and the answer is no. Over 11 settled
+# markets: 6 wins averaging +$0.61, 5 losses averaging -$3.49, net -$13.81. Buying a
+# favourite at ~85c wins 15c and loses 85c, so it needs an ~85% win rate; fills came in at
+# 54.5%. That gap is adverse selection, not variance: a resting bid is hit precisely when
+# the price is falling, so it buys the favourites that are about to fail. Free maker fees
+# do not repair a payoff that asymmetric. Taken off live money 2026-09-08.
 
 series = ["KXBTC15M", "KXETH15M", "KXSOL15M", "KXXRP15M"]
 
