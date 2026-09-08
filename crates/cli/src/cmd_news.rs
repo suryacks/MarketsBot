@@ -121,6 +121,8 @@ pub async fn run(a: Args) -> Result<()> {
     let done: HashSet<(String, i64)> = rows.iter().map(|r| (r.ticker.clone(), r.horizon_secs)).collect();
     let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent("marketsbot-research").build()?;
     info!(markets = chosen.len(), existing = rows.len(), "news features");
+    // One GDELT lookup per (query, day) — every strike of an economics ladder shares its event's news.
+    let mut cache: std::collections::HashMap<(String, i64), Option<(f64, f64, f64, f64)>> = std::collections::HashMap::new();
     let mut n_req = 0usize;
     for (i, m) in chosen.iter().enumerate() {
         let Some(q) = query_for(&m.title) else { continue };
@@ -132,35 +134,42 @@ pub async fn run(a: Args) -> Result<()> {
             if at <= m.open_ts {
                 continue;
             }
-            let (lo, hi) = (at - 2 * 86_400, at);
-            let tone = match timeline(&client, &q, lo, hi, "timelinetone").await {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!(ticker = %m.ticker, error = %e, "gdelt tone failed");
-                    tokio::time::sleep(Duration::from_millis(a.pace_ms * 3)).await;
-                    continue;
-                }
-            };
-            tokio::time::sleep(Duration::from_millis(a.pace_ms)).await;
-            let vol = timeline(&client, &q, lo, hi, "timelinevolraw").await.unwrap_or_default();
-            tokio::time::sleep(Duration::from_millis(a.pace_ms)).await;
-            n_req += 2;
-            let (Some(t1), Some(t0)) = (mean_in(&tone, at - 86_400, at), mean_in(&tone, at - 2 * 86_400, at - 86_400)) else { continue };
-            let v1 = mean_in(&vol, at - 86_400, at).unwrap_or(0.0);
-            let v0 = mean_in(&vol, at - 2 * 86_400, at - 86_400).unwrap_or(0.0);
-            rows.push(NewsRow {
-                ticker: m.ticker.clone(),
-                horizon_secs: h,
-                query: q.clone(),
-                tone: t1,
-                tone_prev: t0,
-                articles: v1,
-                articles_prev: v0,
-            });
+            let key = (q.clone(), at / 21_600); // 6-hour buckets
+            if !cache.contains_key(&key) {
+                let (lo, hi) = (at - 2 * 86_400, at);
+                let tone = match timeline(&client, &q, lo, hi, "timelinetone").await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        warn!(ticker = %m.ticker, error = %e, "gdelt tone failed");
+                        tokio::time::sleep(Duration::from_millis(a.pace_ms * 4)).await;
+                        continue;
+                    }
+                };
+                tokio::time::sleep(Duration::from_millis(a.pace_ms)).await;
+                let vol = timeline(&client, &q, lo, hi, "timelinevolraw").await.unwrap_or_default();
+                tokio::time::sleep(Duration::from_millis(a.pace_ms)).await;
+                n_req += 2;
+                let feat = match (mean_in(&tone, at - 86_400, at), mean_in(&tone, at - 2 * 86_400, at - 86_400)) {
+                    (Some(t1), Some(t0)) => Some((t1, t0, mean_in(&vol, at - 86_400, at).unwrap_or(0.0), mean_in(&vol, at - 2 * 86_400, at - 86_400).unwrap_or(0.0))),
+                    _ => None,
+                };
+                cache.insert(key.clone(), feat);
+            }
+            if let Some(Some((t1, t0, v1, v0))) = cache.get(&key) {
+                rows.push(NewsRow {
+                    ticker: m.ticker.clone(),
+                    horizon_secs: h,
+                    query: q.clone(),
+                    tone: *t1,
+                    tone_prev: *t0,
+                    articles: *v1,
+                    articles_prev: *v0,
+                });
+            }
         }
         if i % 25 == 0 {
             write_parquet(&out_path, &rows)?;
-            info!(done = i + 1, of = chosen.len(), rows = rows.len(), requests = n_req, "news progress");
+            info!(done = i + 1, of = chosen.len(), rows = rows.len(), requests = n_req, cached = cache.len(), "news progress");
         }
     }
     write_parquet(&out_path, &rows)?;
