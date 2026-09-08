@@ -85,6 +85,43 @@ pub async fn run(stations: Vec<String>, every: Duration, tx: mpsc::Sender<Market
         .build()?;
     let mut last_seen: HashMap<String, String> = HashMap::new();
     info!(?stations, every_secs = every.as_secs(), "nws observation feed");
+
+    // Backfill the last 24 hours before polling forward. A settlement lock reasons about
+    // the day's running extremes, and those are made once: the maximum in the afternoon,
+    // the minimum at dawn. A process that starts at noon and only watches from then on has
+    // not seen either, so it under-reads the max and over-reads the min -- safe, in that it
+    // simply declines to trade, but it would sit out most of the day it was started.
+    let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    for s in &stations {
+        let url = format!("https://api.weather.gov/stations/{s}/observations?start={since}&limit=200");
+        match http.get(&url).header("Accept", "application/geo+json").send().await {
+            Ok(r) if r.status().is_success() => {
+                let Ok(v) = r.json::<serde_json::Value>().await else { continue };
+                let mut obs: Vec<(i64, f64)> = v["features"]
+                    .as_array()
+                    .map(|fs| {
+                        fs.iter()
+                            .filter_map(|f| {
+                                let p = &f["properties"];
+                                let ts = chrono::DateTime::parse_from_rfc3339(p["timestamp"].as_str()?).ok()?.timestamp_millis();
+                                Some((ts, p["temperature"]["value"].as_f64()? * 9.0 / 5.0 + 32.0))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                obs.sort_by_key(|(ts, _)| *ts); // oldest first, so the day rollover lands correctly
+                let n = obs.len();
+                for (ts_ms, f) in obs {
+                    let _ = tx.send(MarketEvent::Ref(RefPrice { source: SOURCE.into(), symbol: s.clone(), ts_ms, px: f, avg_60s: None })).await;
+                }
+                info!(station = %s, observations = n, "backfilled");
+            }
+            Ok(r) => warn!(station = %s, status = %r.status(), "nws backfill failed"),
+            Err(e) => warn!(station = %s, error = %e, "nws backfill failed"),
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
     loop {
         for s in &stations {
             let url = format!("https://api.weather.gov/stations/{s}/observations/latest");
