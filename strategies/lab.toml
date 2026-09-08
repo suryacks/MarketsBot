@@ -57,6 +57,29 @@ days = 10
 edges = [0.03, 0.05, 0.08]
 blend = 0.5
 
+# ---- daily crypto above/below: same digital-option model, 24-hour horizon ----
+[[experiment]]
+name = "btcd-daily-taker"
+description = "BTC daily above/below strikes (KXBTCD): fair value from spot + realized vol, hours to expiry"
+strategy = "btc15m"
+series = ["KXBTCD"]
+ref_product = "BTC-USD"
+days = 30
+edges = [0.03, 0.05, 0.08]
+blend = 0.5
+min_tau_secs = 1800
+
+[[experiment]]
+name = "ethd-daily-taker"
+description = "ETH daily above/below strikes (KXETHD) with the fair-value model"
+strategy = "btc15m"
+series = ["KXETHD"]
+ref_product = "ETH-USD"
+days = 30
+edges = [0.03, 0.05, 0.08]
+blend = 0.5
+min_tau_secs = 1800
+
 # ---- thin-book market making on recorded live books (needs data/live-weather from `mbot collect`) ----
 [[experiment]]
 name = "weather-spread-maker-book"

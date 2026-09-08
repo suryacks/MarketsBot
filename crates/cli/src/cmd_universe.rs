@@ -52,6 +52,22 @@ struct Sample {
     ret_open: f64,
     yes: bool,
     close_ts: i64,
+    /// volume of the last 3 candles relative to the path's average 3-candle volume (NaN if unknown)
+    vol_ratio: f64,
+    /// ask − bid at the sample
+    spread: f64,
+    /// fraction of the market's life elapsed at the sample (0 = just opened, 1 = closing)
+    age: f64,
+    /// std-dev of mid changes along the path so far (NaN if < 5 points)
+    path_vol: f64,
+    /// ladder consistency vs. sibling strikes in the same event: how much this market is
+    /// priced *above* what the adjacent strike implies (rich) / *below* (cheap); NaN if no siblings
+    ladder_rich: f64,
+    ladder_cheap: f64,
+    /// bucket events: Σ sibling mids − 1 (NaN if < 3 buckets observed)
+    event_dev: f64,
+    /// last-candle mid change (for volume × direction interactions)
+    last_ret: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
@@ -129,6 +145,13 @@ pub async fn run(a: Args) -> Result<()> {
     let short_h = [120i64, 300, 600, 900, 1800];
     let long_h = [3600i64, 3 * 3600, 6 * 3600, 12 * 3600, 24 * 3600, 48 * 3600];
     let mut samples: Vec<Sample> = Vec::new();
+    // side tables for the event-level second pass: (ticker, horizon) -> sample index
+    let mut idx_of: HashMap<(String, i64), usize> = HashMap::new();
+    let meta: HashMap<&str, &DsMarket> = markets.iter().map(|m| (m.ticker.as_str(), m)).collect();
+    let mut by_event: HashMap<&str, Vec<&DsMarket>> = HashMap::new();
+    for m in &markets {
+        by_event.entry(m.event_ticker.as_str()).or_default().push(m);
+    }
     for m in &markets {
         let Some(path) = by_ticker.get(m.ticker.as_str()) else { continue };
         if path.len() < 3 {
@@ -187,7 +210,33 @@ pub async fn run(a: Args) -> Result<()> {
             let extreme = if i == 0 { 0 } else if mid >= hi { 1 } else if mid <= lo { -1 } else { 0 };
             let dt = chrono::DateTime::from_timestamp(p.ts, 0).unwrap();
             use chrono::{Datelike, Timelike};
+            // volume surge: last 3 candles vs average 3-candle volume over the path so far
+            let vol_ratio = if i >= 6 {
+                let recent: f64 = path[i.saturating_sub(2)..=i].iter().map(|c| c.volume).sum();
+                let avg3 = path[..i].iter().map(|c| c.volume).sum::<f64>() / (i as f64) * 3.0;
+                if avg3 > 0.0 { recent / avg3 } else { f64::NAN }
+            } else {
+                f64::NAN
+            };
+            let path_vol = {
+                let ch: Vec<f64> = mids[..=i].windows(2).filter_map(|w| Some(w[1]? - w[0]?)).collect();
+                if ch.len() >= 5 {
+                    let mu = ch.iter().sum::<f64>() / ch.len() as f64;
+                    (ch.iter().map(|c| (c - mu).powi(2)).sum::<f64>() / (ch.len() as f64 - 1.0)).sqrt()
+                } else {
+                    f64::NAN
+                }
+            };
+            idx_of.insert((m.ticker.clone(), h), samples.len());
             samples.push(Sample {
+                vol_ratio,
+                spread: ask - bid,
+                age: ((p.ts - m.open_ts) as f64 / duration as f64).clamp(0.0, 1.0),
+                path_vol,
+                ladder_rich: f64::NAN,
+                ladder_cheap: f64::NAN,
+                event_dev: f64::NAN,
+                last_ret: ret[0],
                 series: sid,
                 category: cid,
                 horizon: h,
@@ -204,7 +253,56 @@ pub async fn run(a: Args) -> Result<()> {
             });
         }
     }
-    info!(samples = samples.len(), series = series_names.len(), categories = cat_names.len(), "samples built");
+    // ---- second pass: event-level structure (ladders and bucket sums) ----
+    let mut n_ladder = 0usize;
+    let mut n_event = 0usize;
+    for (ticker, h) in idx_of.keys().cloned().collect::<Vec<_>>() {
+        let Some(m) = meta.get(ticker.as_str()) else { continue };
+        let Some(sibs) = by_event.get(m.event_ticker.as_str()) else { continue };
+        if sibs.len() < 2 {
+            continue;
+        }
+        let mid_of = |t: &str| idx_of.get(&(t.to_string(), h)).map(|&i| samples[i].mid);
+        let me = samples[idx_of[&(ticker.clone(), h)]].mid;
+        let st = m.strike_type.as_str();
+        let is_bucket = st == "between" || ticker.rsplit('-').next().map(|s| s.starts_with('B')).unwrap_or(false);
+        if is_bucket {
+            let mids: Vec<f64> = sibs.iter().filter_map(|s| mid_of(&s.ticker)).collect();
+            if mids.len() >= 3 {
+                let dev = mids.iter().sum::<f64>() - 1.0;
+                samples[idx_of[&(ticker.clone(), h)]].event_dev = dev;
+                n_event += 1;
+            }
+        } else if let Some(k) = m.floor_strike
+            && matches!(st, "greater" | "greater_or_equal" | "less" | "less_or_equal")
+        {
+            // direction: for ">" ladders P falls with strike; for "<" ladders P rises with strike
+            let d = if st.starts_with("greater") { 1.0 } else { -1.0 };
+            let mut lower: Option<(f64, f64)> = None; // (strike, mid) of nearest lower strike
+            let mut higher: Option<(f64, f64)> = None;
+            for s in sibs.iter().filter(|s| s.ticker != ticker && s.strike_type == st) {
+                let (Some(sk), Some(sm)) = (s.floor_strike, mid_of(&s.ticker)) else { continue };
+                if sk < k && lower.map(|(lk, _)| sk > lk).unwrap_or(true) {
+                    lower = Some((sk, sm));
+                }
+                if sk > k && higher.map(|(hk, _)| sk < hk).unwrap_or(true) {
+                    higher = Some((sk, sm));
+                }
+            }
+            // ">" ladder: me ≤ lower_mid and me ≥ higher_mid. rich = me − upper bound, cheap = lower bound − me
+            let upper = if d > 0.0 { lower.map(|x| x.1) } else { higher.map(|x| x.1) };
+            let lowerb = if d > 0.0 { higher.map(|x| x.1) } else { lower.map(|x| x.1) };
+            let s = &mut samples[idx_of[&(ticker.clone(), h)]];
+            if let Some(u) = upper {
+                s.ladder_rich = (me - u).max(0.0);
+                n_ladder += 1;
+            }
+            if let Some(l) = lowerb {
+                s.ladder_cheap = (l - me).max(0.0);
+            }
+        }
+    }
+    info!(samples = samples.len(), series = series_names.len(), categories = cat_names.len(), ladder_samples = n_ladder, bucket_samples = n_event, "samples built");
     let mut closes: Vec<i64> = markets.iter().map(|m| m.close_ts).collect();
     closes.sort();
     let split_ts = closes[closes.len() / 2];
@@ -307,6 +405,69 @@ pub async fn run(a: Args) -> Result<()> {
             }
         }
     }
+    // ---- Families 5–10: different information sources (ALL + category scopes) ----
+    for (scope, _) in scopes.iter().filter(|(n, _)| n == "ALL" || n.starts_with("CAT:")) {
+        for &h in &all_h {
+            // 5. ladder relative value vs. adjacent strikes in the same event
+            for &x in &[0.02f64, 0.05, 0.10] {
+                strategies.push((StrategyDef { family: "ladder", scope: scope.clone(), horizon: h, params: format!("rich vs adjacent strike ≥ {x:.2}"), side: Side::BuyNo }, Box::new(move |s| s.ladder_rich.is_finite() && s.ladder_rich >= x)));
+                strategies.push((StrategyDef { family: "ladder", scope: scope.clone(), horizon: h, params: format!("cheap vs adjacent strike ≥ {x:.2}"), side: Side::BuyYes }, Box::new(move |s| s.ladder_cheap.is_finite() && s.ladder_cheap >= x)));
+            }
+            // 6. bucket-sum deviation: Σ buckets in the event vs $1
+            for &x in &[0.03f64, 0.06, 0.10] {
+                strategies.push((StrategyDef { family: "bucket-sum", scope: scope.clone(), horizon: h, params: format!("event Σ ≥ 1+{x:.2} (rich)"), side: Side::BuyNo }, Box::new(move |s| s.event_dev.is_finite() && s.event_dev >= x)));
+                strategies.push((StrategyDef { family: "bucket-sum", scope: scope.clone(), horizon: h, params: format!("event Σ ≤ 1−{x:.2} (cheap)"), side: Side::BuyYes }, Box::new(move |s| s.event_dev.is_finite() && s.event_dev <= -x)));
+            }
+            // 7. volume surge × direction of the last candle
+            for &r in &[2.0f64, 4.0] {
+                for up in [true, false] {
+                    for side in [Side::BuyYes, Side::BuyNo] {
+                        strategies.push((
+                            StrategyDef { family: "volume-surge", scope: scope.clone(), horizon: h, params: format!("volume ≥ {r:.0}× avg, last candle {}", if up { "up" } else { "down" }), side },
+                            Box::new(move |s| s.vol_ratio.is_finite() && s.vol_ratio >= r && s.last_ret.is_finite() && if up { s.last_ret > 0.0 } else { s.last_ret < 0.0 }),
+                        ));
+                    }
+                }
+            }
+            // 8. spread regime × price side
+            for &sp in &[0.03f64, 0.06] {
+                for (lo, hi, lbl) in [(0.02, 0.5, "px < 0.50"), (0.5, 0.98, "px ≥ 0.50")] {
+                    for side in [Side::BuyYes, Side::BuyNo] {
+                        strategies.push((StrategyDef { family: "spread-regime", scope: scope.clone(), horizon: h, params: format!("spread ≥ {sp:.2}, {lbl}"), side }, Box::new(move |s| s.spread >= sp && s.mid >= lo && s.mid < hi)));
+                    }
+                }
+            }
+            // 9. market age × extreme price
+            for (amin, amax, al) in [(0.0, 0.15, "young (<15% of life)"), (0.85, 1.0, "old (>85% of life)")] {
+                for (lo, hi) in [(0.0, 0.10), (0.10, 0.30), (0.70, 0.90), (0.90, 1.0)] {
+                    for side in [Side::BuyYes, Side::BuyNo] {
+                        strategies.push((StrategyDef { family: "market-age", scope: scope.clone(), horizon: h, params: format!("{al}, px {lo:.2}-{hi:.2}"), side }, Box::new(move |s| s.age >= amin && s.age < amax && s.mid >= lo && s.mid < hi)));
+                    }
+                }
+            }
+            // 10. path volatility regime × price extremes
+            for (vlo, vhi, vl) in [(0.0, 0.01, "calm path"), (0.04, 9.0, "choppy path")] {
+                for (lo, hi) in [(0.0, 0.10), (0.90, 1.0), (0.30, 0.70)] {
+                    for side in [Side::BuyYes, Side::BuyNo] {
+                        strategies.push((StrategyDef { family: "path-vol", scope: scope.clone(), horizon: h, params: format!("{vl}, px {lo:.2}-{hi:.2}"), side }, Box::new(move |s| s.path_vol.is_finite() && s.path_vol >= vlo && s.path_vol < vhi && s.mid >= lo && s.mid < hi)));
+                    }
+                }
+            }
+            // 11. interactions: momentum × price level, drift × volume
+            for &x in &[0.05f64, 0.10] {
+                for (lo, hi) in [(0.2, 0.5), (0.5, 0.8)] {
+                    for side in [Side::BuyYes, Side::BuyNo] {
+                        strategies.push((StrategyDef { family: "interaction", scope: scope.clone(), horizon: h, params: format!("up ≥ {x:.2} over 3 candles & px {lo:.1}-{hi:.1}"), side }, Box::new(move |s| s.ret[1].is_finite() && s.ret[1] >= x && s.mid >= lo && s.mid < hi)));
+                        strategies.push((StrategyDef { family: "interaction", scope: scope.clone(), horizon: h, params: format!("down ≥ {x:.2} over 3 candles & px {lo:.1}-{hi:.1}"), side }, Box::new(move |s| s.ret[1].is_finite() && s.ret[1] <= -x && s.mid >= lo && s.mid < hi)));
+                    }
+                }
+                for side in [Side::BuyYes, Side::BuyNo] {
+                    strategies.push((StrategyDef { family: "interaction", scope: scope.clone(), horizon: h, params: format!("drift ≥ +{x:.2} since open & volume ≥ 2× avg"), side }, Box::new(move |s| s.ret_open.is_finite() && s.ret_open >= x && s.vol_ratio.is_finite() && s.vol_ratio >= 2.0)));
+                    strategies.push((StrategyDef { family: "interaction", scope: scope.clone(), horizon: h, params: format!("drift ≤ −{x:.2} since open & volume ≥ 2× avg"), side }, Box::new(move |s| s.ret_open.is_finite() && s.ret_open <= -x && s.vol_ratio.is_finite() && s.vol_ratio >= 2.0)));
+                }
+            }
+        }
+    }
     info!(strategies = strategies.len(), "universe generated");
 
     // ---- evaluation ----
@@ -370,7 +531,20 @@ pub async fn run(a: Args) -> Result<()> {
             _ => {}
         }
     }
-    println!("\nstrategies generated {}  evaluated (n≥{}) {}  passed IS {}  PASSED OOS {}  (expected by luck ≈ {:.0})", strategies.len(), a.min_n, rows.len(), n_is, n_pass, rows.len() as f64 * 0.025 * 0.025);
+    // Distinct ideas: PASS rows that share family + side + params (ignoring scope/horizon) are one idea.
+    let mut ideas: HashMap<String, (usize, f64)> = HashMap::new();
+    for r in rows.iter().filter(|r| r.verdict == "PASS") {
+        let key = format!("{} | {} | {:?}", r.def.family, r.def.params, r.def.side);
+        let e = ideas.entry(key).or_insert((0, 0.0));
+        e.0 += 1;
+        e.1 = e.1.max(r.oos.t);
+    }
+    let mut idea_list: Vec<(String, usize, f64)> = ideas.into_iter().map(|(k, (n, t))| (k, n, t)).collect();
+    idea_list.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+    println!("\nstrategies generated {}  evaluated (n≥{}) {}  passed IS {}  PASSED OOS {}  distinct ideas {}  (expected by luck ≈ {:.0})", strategies.len(), a.min_n, rows.len(), n_is, n_pass, idea_list.len(), rows.len() as f64 * 0.025 * 0.025);
+    for (k, n, t) in idea_list.iter().take(20) {
+        println!("  idea: {k}  ({n} variants, best OOS t {t:.1})");
+    }
     println!("{:<14} {:<26} {:>8} {:<34} {:>7} | {:>5} {:>7} {:>6} | {:>5} {:>7} {:>6} {:>9}", "family", "scope", "horizon", "params", "side", "n_is", "ev_is", "t_is", "n_oos", "ev_oos", "t_oos", "verdict");
     for r in rows.iter().take(50) {
         println!(
@@ -383,6 +557,7 @@ pub async fn run(a: Args) -> Result<()> {
         "markets": markets.len(), "samples": samples.len(), "series": series_names.len(), "categories": cat_names,
         "generated": strategies.len(), "evaluated": rows.len(), "passed_is": n_is, "passed_oos": n_pass,
         "expected_false_pass": rows.len() as f64 * 0.025 * 0.025, "split_ts": split_ts, "stake": a.stake,
+        "distinct_ideas": idea_list.iter().map(|(k, n, t)| serde_json::json!({"idea": k, "variants": n, "best_oos_t": t})).collect::<Vec<_>>(),
         "families": families.iter().map(|(k, v)| serde_json::json!({"family": k, "evaluated": v[0], "pass": v[1], "fail_oos": v[2], "inconclusive": v[3]})).collect::<Vec<_>>(),
         "rows": rows.iter().take(3000).collect::<Vec<_>>(),
     });
