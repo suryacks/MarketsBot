@@ -7,3 +7,7 @@
 *.p8
 *.log
 .DS_Store
+
+# credentials (any .env variant)
+.env*
+!.env.example
