@@ -62,6 +62,8 @@ pub struct KalshiExecutor {
     client: KalshiClient,
     now_ms: i64,
     books: HashMap<String, Orderbook>,
+    /// Kalshi's own valuation of open positions, in dollars (from the balance call).
+    portfolio_value: f64,
     positions: HashMap<String, Position>,
     cash: Fp,
     initial_cash: Fp,
@@ -121,6 +123,7 @@ impl KalshiExecutor {
             client,
             now_ms: chrono::Utc::now().timestamp_millis(),
             books: HashMap::new(),
+            portfolio_value: 0.0,
             positions: HashMap::new(),
             cash: Fp::ZERO,
             initial_cash: Fp::ZERO,
@@ -136,7 +139,10 @@ impl KalshiExecutor {
             sent: 0,
         };
         ex.sync_account().await?;
-        ex.initial_cash = ex.cash;
+        // Baseline is what the account is WORTH at start-up, not just its cash. After a
+        // restart the positions are still there but the cash that bought them is gone, so
+        // a cash-only baseline reports the value of pre-existing positions as fresh profit.
+        ex.initial_cash = ex.cash + Fp::from_f64(ex.portfolio_value);
         Ok(ex)
     }
 
@@ -155,6 +161,7 @@ impl KalshiExecutor {
             .or_else(|| bal["balance"].as_i64().map(|c| Fp::from_f64(c as f64 / 100.0)))
             .unwrap_or(Fp::ZERO);
         self.cash = dollars;
+        self.portfolio_value = bal["portfolio_value"].as_f64().map(|c| c / 100.0).unwrap_or(0.0);
         let pos = self.client.get_positions().await?;
         if let Some(mps) = pos["market_positions"].as_array() {
             for mp in mps {
@@ -168,6 +175,18 @@ impl KalshiExecutor {
                     ..Default::default()
                 });
                 p.yes_qty = q;
+                // Restore the cost basis, which does not survive a restart. Kalshi reports
+                // exposure, so the average price paid is exposure/qty when long and
+                // 1 - exposure/|qty| when short (the collateral side of the same trade).
+                let exposure = mp["market_exposure_dollars"].as_str().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                let qf = q.to_f64();
+                if exposure > 0.0 && qf.abs() > 1e-9 {
+                    let px_avg = if qf > 0.0 { exposure / qf } else { 1.0 - exposure / -qf };
+                    p.cash = Fp::from_f64(-px_avg * qf);
+                }
+                if let Some(f) = mp["fees_paid_dollars"].as_str().and_then(|s| s.parse::<f64>().ok()) {
+                    p.fees = Fp::from_f64(f);
+                }
             }
         }
         info!(cash = %self.cash, positions = self.positions.len(), "account synced");
