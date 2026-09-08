@@ -241,6 +241,12 @@ pub async fn run(a: Args) -> Result<()> {
         v["sweeps"] = json!(sweeps);
         v["best"] = best.map(|(_, r)| r).unwrap_or(json!(null));
         v["verdict"] = v["best"]["verdict"].clone();
+        // A maker strategy scored on the trade tape depends on an assumed queue-fill probability that
+        // live books have already shown to be optimistic; it cannot pass on tape data alone.
+        if e.maker && e.mode != "book" && v["verdict"] == "PASS" {
+            v["verdict"] = json!("NEEDS BOOK DATA");
+            v["note"] = json!("maker fills on the trade tape assume a queue-fill probability; live books show ~3k contracts ahead of each quote — confirm with mode = \"book\" on recorded books (paper run is doing this)");
+        }
         v["updated_ms"] = json!(chrono::Utc::now().timestamp_millis());
         write(&a.out, &e.name, &v)?;
     }
