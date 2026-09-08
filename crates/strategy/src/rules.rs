@@ -64,10 +64,23 @@ impl Default for RuleTraderConfig {
     }
 }
 
+/// Unsigned decimals in a params string ("px 0.95-1.00" → [0.95, 1.00]; "up +0.30 since open" → [0.30]).
 fn nums(s: &str) -> Vec<f64> {
-    s.split(|c: char| !c.is_ascii_digit() && c != '.' && c != '-' && c != '+')
+    s.split(|c: char| !c.is_ascii_digit() && c != '.')
+        .filter(|x| !x.is_empty() && *x != ".")
         .filter_map(|x| x.parse().ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parses_params() {
+        assert_eq!(nums("px 0.95-1.00"), vec![0.95, 1.0]);
+        assert_eq!(nums("US evening 20-04 UTC, px 0.00-0.05"), vec![20.0, 4.0, 0.0, 0.05]);
+        assert_eq!(nums("down -0.10 since open"), vec![0.10]);
+    }
 }
 
 impl RuleTraderConfig {
@@ -110,7 +123,8 @@ impl RuleTraderConfig {
                     "drift-since-open" => {
                         let n = nums(p);
                         if let Some(d) = n.first() {
-                            rules.push(Rule { kind: "drift".into(), drift: *d, ..base });
+                            let signed = if p.contains("down") { -*d } else { *d };
+                            rules.push(Rule { kind: "drift".into(), drift: signed, ..base });
                         }
                     }
                     "side-bias" => rules.push(base),
