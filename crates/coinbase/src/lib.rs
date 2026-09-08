@@ -6,6 +6,7 @@
 //! aggregate of Coinbase/Kraken/Bitstamp/etc. spot prices — Coinbase spot is a
 //! close, fast proxy.
 
+pub mod nowcast;
 pub mod nws;
 
 use anyhow::{anyhow, Context, Result};

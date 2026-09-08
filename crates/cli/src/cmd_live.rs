@@ -66,6 +66,10 @@ pub struct FeedArgs {
     /// settlement index for the metals/energy 15-minute markets. Needs API keys.
     #[arg(long)]
     pub pyth_feed: bool,
+    /// Poll the radar 15-minute precipitation nowcast and the hourly HRRR model for the
+    /// followed weather stations (data that leads the gauges).
+    #[arg(long)]
+    pub nowcast: bool,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -248,6 +252,24 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
             tokio::spawn(async move {
                 if let Err(e) = mb_coinbase::nws::run(stations, Duration::from_secs(60), txc).await {
                     warn!(error = %e, "nws feed ended");
+                }
+            });
+        }
+    }
+
+    // Radar nowcast + HRRR
+    if a.nowcast {
+        let mut stations: Vec<String> = a.series.iter().filter_map(|s| mb_coinbase::nws::station_for(s)).map(String::from).collect();
+        if a.series.iter().any(|s| s == "KXRAIN") {
+            stations.extend(mb_coinbase::nws::RAIN_STATIONS.iter().map(|(_, s)| s.to_string()));
+        }
+        stations.sort();
+        stations.dedup();
+        if !stations.is_empty() {
+            let txc = tx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = mb_coinbase::nowcast::run(stations, Duration::from_secs(300), txc).await {
+                    warn!(error = %e, "nowcast feed ended");
                 }
             });
         }

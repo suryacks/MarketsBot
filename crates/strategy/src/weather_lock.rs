@@ -27,6 +27,16 @@ pub struct WeatherLockConfig {
     pub stake: f64,
     /// Safety margin in °F above the strike before calling it decided (station/report mismatch).
     pub margin_f: f64,
+    /// Trade rain markets on the radar nowcast (rain arriving before the gauge records it).
+    pub use_nowcast: bool,
+    /// mm of precipitation forecast in the next 60 minutes to treat rain as very likely.
+    pub nowcast_mm: f64,
+    /// Only buy rain YES on the nowcast below this price (above it there is no room).
+    pub nowcast_max_px: f64,
+    /// Trade temperature buckets the HRRR model says are already out of reach.
+    pub use_hrrr: bool,
+    /// °F the HRRR remaining-max must clear a bucket by before selling it.
+    pub hrrr_margin_f: f64,
 }
 
 impl Default for WeatherLockConfig {
@@ -38,6 +48,11 @@ impl Default for WeatherLockConfig {
             min_edge: 0.02,
             stake: 2.0,
             margin_f: 0.0,
+            use_nowcast: true,
+            nowcast_mm: 1.0,
+            nowcast_max_px: 0.75,
+            use_hrrr: true,
+            hrrr_margin_f: 4.0,
         }
     }
 }
@@ -67,9 +82,15 @@ pub struct WeatherLock {
     rain: HashMap<String, (i64, f64)>,
     /// KXRAIN ticker -> (station, close_ts_ms)
     rain_markets: HashMap<String, (String, i64)>,
+    /// station -> (ts, mm expected in the next 60 min)
+    nowcast: HashMap<String, (i64, f64)>,
+    /// (station, local day) -> (ts, HRRR max °F for that day)
+    hrrr: HashMap<(String, i64), (i64, f64)>,
     traded: HashSet<String>,
     pub orders: u64,
     pub decided: u64,
+    pub nowcast_trades: u64,
+    pub hrrr_trades: u64,
 }
 
 fn rain_station_offset(station: &str) -> i32 {
@@ -100,9 +121,93 @@ impl WeatherLock {
             run_max: HashMap::new(),
             rain: HashMap::new(),
             rain_markets: HashMap::new(),
+            nowcast: HashMap::new(),
+            hrrr: HashMap::new(),
             traded: HashSet::new(),
             orders: 0,
             decided: 0,
+            nowcast_trades: 0,
+            hrrr_trades: 0,
+        }
+    }
+
+    /// Radar nowcast: rain is arriving at this station within the hour and the market
+    /// has not repriced yet. Probabilistic — sized like any other directional trade.
+    fn evaluate_nowcast(&mut self, station: &str, ctx: &mut dyn Context) {
+        if !self.cfg.use_nowcast {
+            return;
+        }
+        let Some(&(ts, mm)) = self.nowcast.get(station) else { return };
+        let now = ctx.now_ms();
+        if mm < self.cfg.nowcast_mm || now - ts > 20 * 60_000 {
+            return;
+        }
+        let tickers: Vec<String> = self
+            .rain_markets
+            .iter()
+            .filter(|(t, (st, close))| st == station && !self.traded.contains(*t) && *close > now + 30 * 60_000)
+            .map(|(t, _)| t.clone())
+            .collect();
+        for t in tickers {
+            let Some(book) = ctx.book(&t) else { continue };
+            let Some((ask, aq)) = book.best_ask() else { continue };
+            if ask.to_f64() > self.cfg.nowcast_max_px {
+                continue;
+            }
+            let qty = (self.cfg.stake / ask.to_f64().max(0.02)).floor().min(aq.to_f64());
+            if qty < 1.0 {
+                continue;
+            }
+            tracing::info!(ticker = %t, station, nowcast_mm = mm, ask = %ask, "RAIN NOWCAST trade");
+            ctx.submit(OrderRequest::buy_yes(&t, ask, Fp::from_int(qty as i64), Tif::Ioc).tagged("rain_nowcast"));
+            self.traded.insert(t);
+            self.orders += 1;
+            self.nowcast_trades += 1;
+        }
+    }
+
+    /// HRRR: the 3 km model's remaining maximum for today is far above a bucket, so that
+    /// bucket cannot be the day's max — sell it before the human forecast catches up.
+    fn evaluate_hrrr(&mut self, station: &str, day: i64, ctx: &mut dyn Context) {
+        if !self.cfg.use_hrrr {
+            return;
+        }
+        let Some(&(ts, hmax)) = self.hrrr.get(&(station.to_string(), day)) else { return };
+        let now = ctx.now_ms();
+        if now - ts > 90 * 60_000 {
+            return;
+        }
+        // Only markets whose own local day matches the forecast day.
+        let tickers: Vec<String> = self
+            .markets
+            .iter()
+            .filter(|(t, m)| {
+                self.cfg.stations.get(&m.series).map(|s| s == station).unwrap_or(false)
+                    && !self.traded.contains(*t)
+                    && m.close_ts_ms > now + 30 * 60_000
+                    && m.hi < 999.0
+                    && hmax > m.hi + self.cfg.hrrr_margin_f
+                    && self.day_key(&m.series, m.close_ts_ms) == day
+            })
+            .map(|(t, _)| t.clone())
+            .collect();
+        for t in tickers {
+            let Some(book) = ctx.book(&t) else { continue };
+            let Some((bid, bq)) = book.best_bid() else { continue };
+            let edge = bid.to_f64() - ctx.fee_model(&t).fee_per_contract(bid, false);
+            if edge < self.cfg.min_edge {
+                continue;
+            }
+            let no_px = 1.0 - bid.to_f64();
+            let qty = (self.cfg.stake / no_px.max(0.02)).floor().min(bq.to_f64());
+            if qty < 1.0 {
+                continue;
+            }
+            tracing::info!(ticker = %t, station, hrrr_max = hmax, bid = %bid, "HRRR trade (bucket out of reach)");
+            ctx.submit(OrderRequest::sell_yes(&t, bid, Fp::from_int(qty as i64), Tif::Ioc).tagged("hrrr_no"));
+            self.traded.insert(t);
+            self.orders += 1;
+            self.hrrr_trades += 1;
         }
     }
 
@@ -233,6 +338,19 @@ impl Strategy for WeatherLock {
                     self.markets.insert(m.ticker.clone(), Mkt { series: m.series.clone(), close_ts_ms: m.close_ts_ms, lo, hi });
                 }
             }
+            MarketEvent::Ref(r) if r.source == "nowcast" => {
+                if let Some(st) = r.symbol.strip_suffix(":nowcast_precip_60m") {
+                    let st = st.to_string();
+                    self.nowcast.insert(st.clone(), (r.ts_ms, r.px));
+                    self.evaluate_nowcast(&st, ctx);
+                } else if let Some(rest) = r.symbol.split(":hrrr_max_f:").nth(1) {
+                    let st = r.symbol.split(':').next().unwrap_or("").to_string();
+                    if let Ok(day) = rest.parse::<i64>() {
+                        self.hrrr.insert((st.clone(), day), (r.ts_ms, r.px));
+                        self.evaluate_hrrr(&st, day, ctx);
+                    }
+                }
+            }
             MarketEvent::Ref(r) if r.source == "nws" && r.symbol.ends_with(":precip_mm") => {
                 let station = r.symbol.trim_end_matches(":precip_mm").to_string();
                 let off = rain_station_offset(&station);
@@ -274,6 +392,9 @@ impl Strategy for WeatherLock {
     }
     fn snapshot(&self) -> serde_json::Value {
         serde_json::json!({"kind": "weather_lock", "mode": "taker", "orders": self.orders, "decided_moments": self.decided,
+                           "nowcast_trades": self.nowcast_trades, "hrrr_trades": self.hrrr_trades,
+                           "nowcast": self.nowcast.iter().filter(|(_, (_, mm))| *mm > 0.0).map(|(s, (_, mm))| serde_json::json!({"station": s, "precip_60m_mm": mm})).collect::<Vec<_>>(),
+                           "hrrr_max": self.hrrr.iter().map(|((s, d), (_, f))| serde_json::json!({"station": s, "day": d, "max_f": f})).collect::<Vec<_>>(),
                            "series": self.cfg.stations.keys().cloned().chain(std::iter::once("KXRAIN".to_string())).collect::<Vec<_>>(),
                            "rain_markets": self.rain_markets.len(),
                            "rain_today_mm": self.rain.iter().filter(|(_, (_, mm))| *mm > 0.0).map(|(s, (_, mm))| serde_json::json!({"station": s, "mm": mm})).collect::<Vec<_>>(),
