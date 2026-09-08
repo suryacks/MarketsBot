@@ -110,12 +110,14 @@ pub fn load_events(root: &Path, f: &HistoryFilter) -> Result<Vec<MarketEvent>> {
             symbol: c.symbol.clone(),
             ts_ms: t0,
             px: c.open,
+            avg_60s: None,
         }));
         events.push(MarketEvent::Ref(RefPrice {
             source: c.source.clone(),
             symbol: c.symbol.clone(),
             ts_ms: t0 + 59_000,
             px: c.close,
+            avg_60s: None,
         }));
         n_ref += 2;
     }

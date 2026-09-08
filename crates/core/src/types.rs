@@ -117,6 +117,10 @@ pub struct RefPrice {
     pub symbol: String,
     pub ts_ms: i64,
     pub px: f64,
+    /// Official running 60-second average of the index, when the feed provides it
+    /// (Kalshi's cfbenchmarks channel) — this *is* the settlement value in progress.
+    #[serde(default)]
+    pub avg_60s: Option<f64>,
 }
 
 /// One of *our* orders got (partially) filled on a live venue.

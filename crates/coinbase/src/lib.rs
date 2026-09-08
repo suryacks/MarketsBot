@@ -236,6 +236,7 @@ impl CoinbaseWs {
                         symbol: sym.to_string(),
                         ts_ms,
                         px,
+                        avg_60s: None,
                     });
                     if tx.send(ev).await.is_err() {
                         return Ok(());

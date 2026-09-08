@@ -186,6 +186,7 @@ pub async fn run(a: Args) -> Result<()> {
                                 symbol: a.ref_product.clone(),
                                 ts_ms: t.ts_ms,
                                 px: t.px,
+                                avg_60s: None,
                             }),
                         }
                     }

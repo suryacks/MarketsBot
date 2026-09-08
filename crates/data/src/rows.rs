@@ -65,6 +65,8 @@ pub struct RefRow {
     pub symbol: String,
     pub ts_ms: i64,
     pub px: f64,
+    #[serde(default)]
+    pub avg_60s: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -175,6 +177,7 @@ pub fn event_to_rows(ev: &MarketEvent) -> RowBatch {
             symbol: r.symbol.clone(),
             ts_ms: r.ts_ms,
             px: r.px,
+            avg_60s: r.avg_60s,
         }]),
         MarketEvent::Market(m) => RowBatch::Markets(vec![MarketRow::from(m)]),
         MarketEvent::Ticker {
@@ -342,5 +345,6 @@ pub fn ref_row_to_event(r: &RefRow) -> MarketEvent {
         symbol: r.symbol.clone(),
         ts_ms: r.ts_ms,
         px: r.px,
+        avg_60s: r.avg_60s,
     })
 }

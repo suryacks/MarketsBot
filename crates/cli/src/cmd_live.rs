@@ -48,6 +48,10 @@ pub struct FeedArgs {
     /// With --all-open: only markets whose series is in these categories (repeatable)
     #[arg(long = "category")]
     pub categories: Vec<String>,
+    /// Subscribe to Kalshi's CF Benchmarks index feed (BRTI, ETHUSD_RTI, SOLUSD_RTI): the exact
+    /// settlement index with its official running 60 s average. Needs API keys.
+    #[arg(long)]
+    pub index_feed: bool,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -80,6 +84,12 @@ pub struct PaperArgs {
     /// Override config: realized | implied | max | mean
     #[arg(long)]
     pub vol_source: Option<String>,
+    /// Override config: endgame mode (trade inside the settlement-average window)
+    #[arg(long)]
+    pub endgame: bool,
+    /// Override config: reference symbol (e.g. BRTI with --index-feed, BTC-USD with Coinbase)
+    #[arg(long)]
+    pub ref_symbol: Option<String>,
     /// btc15m | spread-maker | rules
     #[arg(long, default_value = "btc15m")]
     pub strategy: String,
@@ -170,6 +180,9 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
             let mut channels = vec![Channel::OrderbookDelta, Channel::Trade, Channel::Ticker];
             if with_fills {
                 channels.push(Channel::Fill);
+            }
+            if a.index_feed {
+                channels.push(Channel::CfBenchmarks);
             }
             tokio::spawn(async move {
                 if let Err(e) = ws.run_dynamic(&channels, wrx, txc).await {
@@ -640,6 +653,13 @@ pub fn build_strategy(a: &PaperArgs) -> Result<(Box<dyn mb_core::Strategy>, Stri
             }
             if let Some(v) = &a.vol_source {
                 cfg.vol_source = v.clone();
+            }
+            if a.endgame {
+                cfg.endgame = true;
+                cfg.max_entries_per_market = cfg.max_entries_per_market.max(6);
+            }
+            if let Some(r) = &a.ref_symbol {
+                cfg.ref_symbol = r.clone();
             }
             cfg.scale_to_bankroll(a.bankroll);
             let series = cfg.series.clone();

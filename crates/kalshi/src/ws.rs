@@ -20,6 +20,8 @@ pub enum Channel {
     Trade,
     Fill,
     MarketLifecycle,
+    /// CF Benchmarks index values (BRTI, ETHUSD_RTI, …) incl. the official running 60 s average.
+    CfBenchmarks,
 }
 
 impl Channel {
@@ -30,13 +32,18 @@ impl Channel {
             Channel::Trade => "trade",
             Channel::Fill => "fill",
             Channel::MarketLifecycle => "market_lifecycle_v2",
+            Channel::CfBenchmarks => "cfbenchmarks_value",
         }
     }
 }
 
+/// Index ids to subscribe on the cfbenchmarks channel (set via `KalshiWs::with_indices`).
+pub const DEFAULT_INDICES: &[&str] = &["BRTI", "ETHUSD_RTI", "SOLUSD_RTI"];
+
 pub struct KalshiWs {
     url: String,
     auth: Arc<KalshiAuth>,
+    indices: Vec<String>,
 }
 
 impl KalshiWs {
@@ -44,7 +51,13 @@ impl KalshiWs {
         Self {
             url: url.to_string(),
             auth: Arc::new(auth),
+            indices: DEFAULT_INDICES.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    pub fn with_indices(mut self, indices: Vec<String>) -> Self {
+        self.indices = indices;
+        self
     }
 
     pub fn from_env() -> Result<Self> {
@@ -103,7 +116,13 @@ impl KalshiWs {
         info!(url = %self.url, "kalshi ws connected");
         let (mut sink, mut stream) = ws.split();
 
-        let chans: Vec<&str> = channels.iter().map(|c| c.as_str()).collect();
+        // the index feed has its own subscribe shape; market channels share one command
+        if channels.contains(&Channel::CfBenchmarks) {
+            let sub = json!({ "type": "subscribe", "id": 99, "channels": ["cfbenchmarks_value"], "index_ids": self.indices });
+            sink.send(Message::Text(sub.to_string().into())).await?;
+            info!(indices = ?self.indices, "kalshi ws subscribed to cfbenchmarks_value");
+        }
+        let chans: Vec<&str> = channels.iter().filter(|c| **c != Channel::CfBenchmarks).map(|c| c.as_str()).collect();
         let mut cmd_id = 0u64;
         let mut subscribed: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut subscribe = |ts: &[String]| {
@@ -117,9 +136,11 @@ impl KalshiWs {
 
         let initial = tickers.borrow_and_update().clone();
         subscribed.extend(initial.iter().cloned());
-        let msg = subscribe(&initial);
-        sink.send(Message::Text(msg.into())).await?;
-        debug!(n = initial.len(), "kalshi ws subscribed");
+        if !chans.is_empty() {
+            let msg = subscribe(&initial);
+            sink.send(Message::Text(msg.into())).await?;
+            debug!(n = initial.len(), "kalshi ws subscribed");
+        }
 
         let mut ping = tokio::time::interval(Duration::from_secs(10));
         ping.tick().await;
@@ -132,7 +153,7 @@ impl KalshiWs {
                     if changed.is_err() { return Ok(()); }
                     let cur = tickers.borrow_and_update().clone();
                     let new: Vec<String> = cur.iter().filter(|t| !subscribed.contains(*t)).cloned().collect();
-                    if !new.is_empty() {
+                    if !new.is_empty() && !chans.is_empty() {
                         subscribed.extend(new.iter().cloned());
                         let msg = subscribe(&new);
                         sink.send(Message::Text(msg.into())).await?;
@@ -196,6 +217,41 @@ pub fn parse_message(v: &Value) -> Vec<MarketEvent> {
     };
     let ticker = m.get("market_ticker").and_then(Value::as_str).unwrap_or("").to_string();
     match typ {
+        "cfbenchmarks_value" => {
+            let index = m.get("index_id").and_then(Value::as_str).unwrap_or("").to_string();
+            // `data` is a JSON string: {"type":"value","id":"BRTI","time":ms,"value":"68000.12"}
+            let inner: Option<Value> = m.get("data").and_then(Value::as_str).and_then(|s| serde_json::from_str(s).ok());
+            let px = inner
+                .as_ref()
+                .and_then(|d| d.get("value"))
+                .and_then(|v| match v {
+                    Value::String(s) => s.parse::<f64>().ok(),
+                    Value::Number(n) => n.as_f64(),
+                    _ => None,
+                });
+            let Some(px) = px else { return vec![] };
+            let ts = inner
+                .as_ref()
+                .and_then(|d| d.get("time"))
+                .and_then(Value::as_i64)
+                .or_else(|| m.get("received_at").and_then(Value::as_i64))
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let avg = m
+                .get("avg_60s_data")
+                .and_then(|a| a.get("value"))
+                .and_then(|v| match v {
+                    Value::String(s) => s.parse::<f64>().ok(),
+                    Value::Number(n) => n.as_f64(),
+                    _ => None,
+                });
+            vec![MarketEvent::Ref(mb_core::RefPrice {
+                source: "cfbenchmarks".into(),
+                symbol: index,
+                ts_ms: ts,
+                px,
+                avg_60s: avg,
+            })]
+        }
         "orderbook_snapshot" => {
             let levels = |k: &str| -> Vec<(Fp, Fp)> {
                 m.get(k)

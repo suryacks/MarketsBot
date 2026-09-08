@@ -37,6 +37,8 @@ pub struct Btc15mStrategy {
     active: HashMap<String, Active>,
     /// Recent basis-adjusted ref prices (ts_ms, px) for the running settlement average.
     recent: std::collections::VecDeque<(i64, f64)>,
+    /// Official running 60 s average from the index feed, if the feed provides it.
+    official_avg: Option<(i64, f64)>,
     pub stats: Stats,
 }
 
@@ -75,12 +77,20 @@ impl Btc15mStrategy {
             spot: None,
             active: HashMap::new(),
             recent: std::collections::VecDeque::new(),
+            official_avg: None,
             stats: Stats::default(),
         }
     }
 
-    /// Mean of the basis-adjusted ref price over [close − window, now], if we have ≥ 2 points there.
+    /// Running settlement average: the feed's official 60 s average when fresh (≤ 3 s), else
+    /// the mean of the basis-adjusted ref price over [close − window, now] (≥ 2 points).
     fn running_avg(&self, close_ts_ms: i64, window_secs: f64) -> Option<f64> {
+        if let Some((t, a)) = self.official_avg
+            && let Some((now, _)) = self.spot
+            && now - t <= 3_000
+        {
+            return Some(a);
+        }
         let start = close_ts_ms - (window_secs * 1000.0) as i64;
         let b = self.effective_basis();
         let pts: Vec<f64> = self.recent.iter().filter(|(t, _)| *t >= start).map(|(_, p)| p + b).collect();
@@ -377,6 +387,9 @@ impl Strategy for Btc15mStrategy {
                 self.vol.on_ref(r.ts_ms, r.px);
                 self.basis.on_ref(r.ts_ms, r.px);
                 self.spot = Some((r.ts_ms, r.px));
+                if let Some(a) = r.avg_60s {
+                    self.official_avg = Some((r.ts_ms, a));
+                }
                 self.recent.push_back((r.ts_ms, r.px));
                 while self.recent.front().map(|(t, _)| r.ts_ms - *t > 120_000).unwrap_or(false) {
                     self.recent.pop_front();
@@ -447,6 +460,9 @@ impl Strategy for Btc15mStrategy {
             "implied_annual": self.vol.implied_annual(),
             "basis": self.effective_basis(),
             "basis_samples": self.basis.samples(),
+            "endgame": self.cfg.endgame,
+            "official_avg_60s": self.official_avg.map(|(_, a)| a),
+            "ref_symbol": self.cfg.ref_symbol,
             "market_blend": self.cfg.market_blend,
             "min_edge": self.cfg.min_edge,
             "stats": {"evaluations": self.stats.evaluations, "signals": self.stats.signals, "orders": self.stats.orders},
