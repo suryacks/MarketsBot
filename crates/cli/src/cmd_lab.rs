@@ -56,6 +56,7 @@ pub struct Experiment {
     pub min_tau_secs: Option<i64>,
     pub max_entries: Option<u32>,
     pub maker_touch_fill_prob: f64,
+    pub endgame: bool,
     pub description: String,
 }
 
@@ -82,6 +83,7 @@ impl Default for Experiment {
             min_tau_secs: None,
             max_entries: None,
             maker_touch_fill_prob: 0.25,
+            endgame: false,
             description: String::new(),
         }
     }
@@ -200,6 +202,7 @@ pub async fn run(a: Args) -> Result<()> {
             blend: e.blend,
             max_entries: e.max_entries,
             maker_touch_fill_prob: e.maker_touch_fill_prob,
+            endgame: e.endgame,
         };
         let events = match load_spec_events(&spec) {
             Ok(ev) => ev,

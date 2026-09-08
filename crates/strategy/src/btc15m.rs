@@ -10,7 +10,7 @@
 
 use crate::basis::BasisEstimator;
 use crate::config::Btc15mConfig;
-use crate::fair_value::{kelly_fraction_buy, prob_above};
+use crate::fair_value::{kelly_fraction_buy, prob_above, prob_above_endgame};
 use crate::vol::{ImpliedVol, RealizedVol, VolModel, VolSource};
 use mb_core::{Action, Context, Fill, Fp, MarketEvent, MarketInfo, OrderId, OrderRequest, Strategy, Tif};
 use std::collections::HashMap;
@@ -35,6 +35,8 @@ pub struct Btc15mStrategy {
     basis: BasisEstimator,
     spot: Option<(i64, f64)>,
     active: HashMap<String, Active>,
+    /// Recent basis-adjusted ref prices (ts_ms, px) for the running settlement average.
+    recent: std::collections::VecDeque<(i64, f64)>,
     pub stats: Stats,
 }
 
@@ -72,8 +74,17 @@ impl Btc15mStrategy {
             basis,
             spot: None,
             active: HashMap::new(),
+            recent: std::collections::VecDeque::new(),
             stats: Stats::default(),
         }
+    }
+
+    /// Mean of the basis-adjusted ref price over [close − window, now], if we have ≥ 2 points there.
+    fn running_avg(&self, close_ts_ms: i64, window_secs: f64) -> Option<f64> {
+        let start = close_ts_ms - (window_secs * 1000.0) as i64;
+        let b = self.effective_basis();
+        let pts: Vec<f64> = self.recent.iter().filter(|(t, _)| *t >= start).map(|(_, p)| p + b).collect();
+        if pts.len() >= 2 { Some(pts.iter().sum::<f64>() / pts.len() as f64) } else { None }
     }
 
     pub fn config(&self) -> &Btc15mConfig {
@@ -148,9 +159,15 @@ impl Btc15mStrategy {
         self.stats.evaluations += 1;
 
         let secs_left = (a.close_ts_ms - now) / 1000;
-        let in_window = secs_left >= self.cfg.no_trade_last_secs.max(self.cfg.min_tau_secs)
-            && now >= a.open_ts_ms + self.cfg.warmup_secs * 1000
-            && now - spot_ts <= 10_000;
+        let tau = (a.close_ts_ms - now) as f64 / 1000.0;
+        let endgame_now = self.cfg.endgame && tau < self.cfg.settle_avg_secs && tau >= self.cfg.endgame_stop_secs;
+        let in_window = if endgame_now {
+            now - spot_ts <= 3_000
+        } else {
+            secs_left >= self.cfg.no_trade_last_secs.max(self.cfg.min_tau_secs)
+                && now >= a.open_ts_ms + self.cfg.warmup_secs * 1000
+                && now - spot_ts <= 10_000
+        };
         if !in_window {
             self.stats.skipped_window += 1;
             if self.cfg.maker {
@@ -159,8 +176,14 @@ impl Btc15mStrategy {
             return;
         }
 
-        let tau = (a.close_ts_ms - now) as f64 / 1000.0;
-        let model = prob_above(spot + self.effective_basis(), a.strike, self.vol.sigma_per_sec(), tau, self.cfg.settle_avg_secs);
+        let model = if endgame_now {
+            match self.running_avg(a.close_ts_ms, self.cfg.settle_avg_secs) {
+                Some(avg) => prob_above_endgame(spot + self.effective_basis(), a.strike, self.vol.sigma_per_sec(), tau, self.cfg.settle_avg_secs, avg),
+                None => return,
+            }
+        } else {
+            prob_above(spot + self.effective_basis(), a.strike, self.vol.sigma_per_sec(), tau, self.cfg.settle_avg_secs)
+        };
         let fair = match (self.cfg.market_blend > 0.0, ctx.book(ticker).and_then(|b| b.mid())) {
             (true, Some(mid)) => (1.0 - self.cfg.market_blend) * model + self.cfg.market_blend * mid.to_f64(),
             _ => model,
@@ -173,10 +196,11 @@ impl Btc15mStrategy {
             return;
         }
 
-        if self.cfg.maker {
+        if self.cfg.maker && !endgame_now {
             self.evaluate_maker(ticker, fair, ctx);
         } else {
-            if now - a.last_order_ts_ms < self.cfg.requote_ms {
+            let requote = if endgame_now { 250 } else { self.cfg.requote_ms };
+            if now - a.last_order_ts_ms < requote {
                 return;
             }
             self.evaluate_taker(ticker, fair, &a, ctx);
@@ -353,6 +377,10 @@ impl Strategy for Btc15mStrategy {
                 self.vol.on_ref(r.ts_ms, r.px);
                 self.basis.on_ref(r.ts_ms, r.px);
                 self.spot = Some((r.ts_ms, r.px));
+                self.recent.push_back((r.ts_ms, r.px));
+                while self.recent.front().map(|(t, _)| r.ts_ms - *t > 120_000).unwrap_or(false) {
+                    self.recent.pop_front();
+                }
                 let tickers: Vec<String> = self.active.keys().cloned().collect();
                 for t in tickers {
                     self.evaluate(&t, ctx);

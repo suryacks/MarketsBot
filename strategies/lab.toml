@@ -57,6 +57,40 @@ days = 10
 edges = [0.03, 0.05, 0.08]
 blend = 0.5
 
+# ---- endgame: trade inside the 60 s settlement window using the running average (outcome locks in) ----
+[[experiment]]
+name = "btc15m-endgame"
+description = "BTC 15-min, last 60 s: settlement is the 60 s average, so the outcome is progressively known; take the touch when the locked-in average implies more than the price"
+strategy = "btc15m"
+series = ["KXBTC15M"]
+ref_product = "BTC-USD"
+days = 10
+edges = [0.02, 0.03, 0.05]
+endgame = true
+blend = 0.0
+
+[[experiment]]
+name = "eth15m-endgame"
+description = "Endgame pricing on ETH 15-min binaries"
+strategy = "btc15m"
+series = ["KXETH15M"]
+ref_product = "ETH-USD"
+days = 10
+edges = [0.02, 0.03, 0.05]
+endgame = true
+blend = 0.0
+
+[[experiment]]
+name = "sol15m-endgame"
+description = "Endgame pricing on SOL 15-min binaries"
+strategy = "btc15m"
+series = ["KXSOL15M"]
+ref_product = "SOL-USD"
+days = 10
+edges = [0.02, 0.03, 0.05]
+endgame = true
+blend = 0.0
+
 # ---- daily crypto above/below: same digital-option model, 24-hour horizon ----
 [[experiment]]
 name = "btcd-daily-taker"

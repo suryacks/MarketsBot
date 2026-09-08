@@ -64,6 +64,11 @@ pub struct Btc15mConfig {
     /// Only trade when the (blended) fair value is inside [fair_min, fair_max].
     pub fair_min: f64,
     pub fair_max: f64,
+    /// Endgame mode: trade *inside* the settlement-average window using the running average
+    /// (outcome progressively locked in). Overrides min_tau_secs / no_trade_last_secs.
+    pub endgame: bool,
+    /// Endgame: stop this many seconds before close (order latency + safety).
+    pub endgame_stop_secs: f64,
     /// Maker mode: rest post-only quotes at fair ∓ min_edge instead of taking the touch.
     pub maker: bool,
     /// Contracts per resting quote in maker mode.
@@ -102,6 +107,8 @@ impl Default for Btc15mConfig {
             market_blend: 0.0,
             fair_min: 0.0,
             fair_max: 1.0,
+            endgame: false,
+            endgame_stop_secs: 3.0,
             maker: false,
             maker_qty: 10.0,
         }

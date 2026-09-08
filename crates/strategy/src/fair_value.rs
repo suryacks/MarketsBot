@@ -86,6 +86,22 @@ pub fn implied_sigma(spot: f64, strike: f64, px: f64, tau_secs: f64, avg_window_
     if s.is_finite() && s > 0.0 { Some(s) } else { None }
 }
 
+/// Endgame pricing inside the settlement window: `elapsed` seconds of the
+/// `window`-second average are already observed with mean `avg_so_far`; the
+/// remaining `tau` seconds start from `spot`. Settlement ≈ (elapsed·avg_so_far +
+/// tau·mean_remaining)/window with mean_remaining ≈ spot and
+/// Var(mean of BM over tau) = σ²·tau/3.
+pub fn prob_above_endgame(spot: f64, strike: f64, sigma_per_sec: f64, tau_secs: f64, window_secs: f64, avg_so_far: f64) -> f64 {
+    let tau = tau_secs.clamp(0.0, window_secs);
+    let elapsed = window_secs - tau;
+    let mean = (elapsed * avg_so_far + tau * spot) / window_secs;
+    let sd = sigma_per_sec * spot * (tau * tau * tau / 3.0).sqrt() / window_secs; // dollars
+    if sd <= 1e-9 {
+        return if mean >= strike { 1.0 } else { 0.0 };
+    }
+    norm_cdf((mean - strike) / sd)
+}
+
 /// Fractional-Kelly stake (fraction of bankroll) for buying a binary at price
 /// `px` when the true probability is `p`. Returns 0 when there is no edge.
 pub fn kelly_fraction_buy(p: f64, px: f64) -> f64 {
@@ -133,6 +149,19 @@ mod tests {
         assert!((back - sig).abs() / sig < 1e-4, "{back} vs {sig}");
         assert!(implied_sigma(80_000.0, 80_000.0, 0.5, 700.0, 60.0).is_none()); // ATM
         assert!(implied_sigma(80_100.0, 80_000.0, 0.3, 700.0, 60.0).is_none()); // wrong side
+    }
+
+    #[test]
+    fn endgame_locks_in() {
+        let sig = 0.5 / (365.0f64 * 86400.0).sqrt();
+        // 30 s left, running average $50 above strike, spot at strike: still very likely YES
+        let p = prob_above_endgame(80_000.0, 80_000.0, sig, 30.0, 60.0, 80_050.0);
+        assert!(p > 0.95, "{p}");
+        // 59 s left (window just started): close to the plain digital
+        let p0 = prob_above_endgame(80_000.0, 80_000.0, sig, 59.0, 60.0, 80_000.0);
+        assert!((p0 - 0.5).abs() < 0.05);
+        // 1 s left, average below strike: essentially NO
+        assert!(prob_above_endgame(80_100.0, 80_000.0, sig, 1.0, 60.0, 79_990.0) < 0.05);
     }
 
     #[test]
