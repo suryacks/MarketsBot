@@ -41,13 +41,36 @@ pub struct WeatherLockConfig {
 
 impl Default for WeatherLockConfig {
     fn default() -> Self {
-        let pairs = [("KXHIGHNY", "KNYC", -4), ("KXHIGHCHI", "KMDW", -5), ("KXHIGHMIA", "KMIA", -4), ("KXHIGHLAX", "KLAX", -7), ("KXHIGHAUS", "KAUS", -5), ("KXHIGHPHIL", "KPHL", -4), ("KXHIGHDEN", "KDEN", -6)];
+        // Station and local-day offset for every temperature series, chosen by matching
+        // Kalshi's own settled `expiration_value` against each candidate station's
+        // observations (research/station_map.py, 1,913 market-days). KXHIGHNY is absent on
+        // purpose: Central Park read 3F hotter than the official max once in 45 days, which
+        // no workable margin absorbs. Across the 47 kept series a 1F margin leaves zero
+        // days on which an observation-decided lock would have been wrong.
+        let pairs = [
+            ("KXHIGHAUS", "KAUS", -5), ("KXHIGHCHI", "KMDW", -5), ("KXHIGHDEN", "KDEN", -6),
+            ("KXHIGHLAX", "KLAX", -7), ("KXHIGHMIA", "KMIA", -4), ("KXHIGHPHIL", "KPHL", -4),
+            ("KXHIGHTATL", "KATL", -4), ("KXHIGHTBOS", "KBOS", -4), ("KXHIGHTDAL", "KDFW", -5),
+            ("KXHIGHTDC", "KDCA", -4), ("KXHIGHTEWR", "KEWR", -4), ("KXHIGHTHOU", "KHOU", -5),
+            ("KXHIGHTLV", "KLAS", -7), ("KXHIGHTMIN", "KMSP", -5), ("KXHIGHTNOLA", "KMSY", -5),
+            ("KXHIGHTOKC", "KOKC", -5), ("KXHIGHTPHX", "KPHX", -7), ("KXHIGHTSAN", "KSAN", -7),
+            ("KXHIGHTSATX", "KSAT", -5), ("KXHIGHTSDF", "KSDF", -4), ("KXHIGHTSEA", "KSEA", -7),
+            ("KXHIGHTSFO", "KSFO", -7), ("KXHIGHTTTN", "KTTN", -4), ("KXLOWTATL", "KATL", -4),
+            ("KXLOWTAUS", "KAUS", -5), ("KXLOWTBOS", "KBOS", -4), ("KXLOWTCHI", "KMDW", -5),
+            ("KXLOWTDAL", "KDFW", -5), ("KXLOWTDC", "KDCA", -4), ("KXLOWTDEN", "KDEN", -6),
+            ("KXLOWTEWR", "KEWR", -4), ("KXLOWTHOU", "KHOU", -5), ("KXLOWTLAX", "KLAX", -7),
+            ("KXLOWTLV", "KLAS", -7), ("KXLOWTMIA", "KMIA", -4), ("KXLOWTMIN", "KMSP", -5),
+            ("KXLOWTNOLA", "KMSY", -5), ("KXLOWTNYC", "KNYC", -4), ("KXLOWTOKC", "KOKC", -5),
+            ("KXLOWTPHIL", "KPHL", -4), ("KXLOWTPHX", "KPHX", -7), ("KXLOWTSAN", "KSAN", -7),
+            ("KXLOWTSATX", "KSAT", -5), ("KXLOWTSDF", "KSDF", -4), ("KXLOWTSEA", "KSEA", -7),
+            ("KXLOWTSFO", "KSFO", -7), ("KXLOWTTTN", "KTTN", -4),
+        ];
         Self {
             stations: pairs.iter().map(|(s, st, _)| (s.to_string(), st.to_string())).collect(),
             utc_offset_hours: pairs.iter().map(|(s, _, o)| (s.to_string(), *o)).collect(),
             min_edge: 0.02,
             stake: 2.0,
-            margin_f: 0.0,
+            margin_f: 1.0,
             use_nowcast: true,
             nowcast_mm: 1.0,
             nowcast_max_px: 0.75,
@@ -78,6 +101,10 @@ pub struct WeatherLock {
     markets: HashMap<String, Mkt>,
     /// station -> (local day key, running max)
     run_max: HashMap<String, (i64, f64)>,
+    /// station -> (local day key, running min). The mirror of `run_max`: a day's
+    /// observed minimum is an upper bound on the official minimum, so it decides
+    /// low-temperature markets the way the observed maximum decides highs.
+    run_min: HashMap<String, (i64, f64)>,
     /// station -> (local day key, mm of measurable precipitation observed today)
     rain: HashMap<String, (i64, f64)>,
     /// KXRAIN ticker -> (station, close_ts_ms)
@@ -119,6 +146,7 @@ impl WeatherLock {
             cfg,
             markets: HashMap::new(),
             run_max: HashMap::new(),
+            run_min: HashMap::new(),
             rain: HashMap::new(),
             rain_markets: HashMap::new(),
             nowcast: HashMap::new(),
@@ -188,6 +216,9 @@ impl WeatherLock {
             .iter()
             .filter(|(t, m)| {
                 self.cfg.stations.get(&m.series).map(|s| s == station).unwrap_or(false)
+                    // The forecast is the day's MAXIMUM. It says nothing about the day's
+                    // minimum, so it must never be used to rule out a low-temperature bucket.
+                    && !Self::is_low(&m.series)
                     && !self.traded.contains(*t)
                     && m.close_ts_ms > now + 30 * 60_000
                     && m.hi < 999.0
@@ -265,6 +296,8 @@ impl WeatherLock {
         }
     }
 
+    /// `(lo, hi)`: the market pays iff the official value lands in `[lo, hi]`.
+    /// `hi = 999` means no upper bound, `lo = -999` no lower bound.
     fn parse_market(m: &mb_core::MarketInfo) -> Option<(f64, f64)> {
         let tick = m.ticker.rsplit('-').next()?;
         if let Some(rest) = tick.strip_prefix('B') {
@@ -274,8 +307,15 @@ impl WeatherLock {
         match m.strike_type.as_str() {
             "greater" => m.floor_strike.map(|k| (k.floor() + 1.0, 999.0)),
             "greater_or_equal" => m.floor_strike.map(|k| (k.ceil(), 999.0)),
+            "less" => m.cap_strike.map(|k| (-999.0, k.ceil() - 1.0)),
+            "less_or_equal" => m.cap_strike.map(|k| (-999.0, k.floor())),
             _ => None,
         }
+    }
+
+    /// Does this series settle on the day's minimum rather than its maximum?
+    fn is_low(series: &str) -> bool {
+        series.starts_with("KXLOW")
     }
 
     /// Local day key for a market: the local date of (close − 6 h).
@@ -285,7 +325,9 @@ impl WeatherLock {
     }
 
     fn evaluate_all(&mut self, station: &str, ctx: &mut dyn Context) {
-        let Some(&(day, mx)) = self.run_max.get(station) else { return };
+        let hi_obs = self.run_max.get(station).copied();
+        let lo_obs = self.run_min.get(station).copied();
+        let Some(day) = hi_obs.map(|(d, _)| d).or_else(|| lo_obs.map(|(d, _)| d)) else { return };
         let now = ctx.now_ms();
         let tickers: Vec<String> = self
             .markets
@@ -295,8 +337,22 @@ impl WeatherLock {
             .collect();
         for t in tickers {
             let m = self.markets[&t].clone();
-            let decided_yes = mx >= m.lo + self.cfg.margin_f && m.hi >= 999.0; // "greater" strike passed
-            let decided_no = mx > m.hi + self.cfg.margin_f && m.hi < 999.0; // bucket overshot
+            // Observations only ever move one way within a day: the running maximum can
+            // rise and the running minimum can fall. So each is a one-sided bound on the
+            // official number, and only the side it has already passed is decided.
+            let (decided_yes, decided_no, obs) = if Self::is_low(&m.series) {
+                match lo_obs {
+                    // The minimum is an upper bound: it can still get colder, never warmer.
+                    Some((d, mn)) if d == day => (mn <= m.hi - self.cfg.margin_f && m.lo <= -999.0, mn < m.lo - self.cfg.margin_f, mn),
+                    _ => continue,
+                }
+            } else {
+                match hi_obs {
+                    // The maximum is a lower bound: it can still get hotter, never cooler.
+                    Some((d, mx)) if d == day => (mx >= m.lo + self.cfg.margin_f && m.hi >= 999.0, mx > m.hi + self.cfg.margin_f && m.hi < 999.0, mx),
+                    _ => continue,
+                }
+            };
             if !decided_yes && !decided_no {
                 continue;
             }
@@ -327,7 +383,7 @@ impl WeatherLock {
                 }
                 OrderRequest::sell_yes(&t, bid, Fp::from_int(qty as i64), Tif::Ioc).tagged("wx_lock_no")
             };
-            tracing::info!(ticker = %t, station, running_max = mx, lo = m.lo, hi = m.hi, "WEATHER LOCK trade");
+            tracing::info!(ticker = %t, station, observed = obs, kind = if Self::is_low(&m.series) { "min" } else { "max" }, lo = m.lo, hi = m.hi, "WEATHER LOCK trade");
             // `traded` dies with the process; the exchange position is what survives a restart.
             if !ctx.position(&t).yes_qty.is_zero() {
                 self.traded.insert(t);
@@ -393,6 +449,12 @@ impl Strategy for WeatherLock {
                 } else if r.px > e.1 {
                     e.1 = r.px;
                 }
+                let e = self.run_min.entry(r.symbol.clone()).or_insert((day, r.px));
+                if e.0 != day {
+                    *e = (day, r.px);
+                } else if r.px < e.1 {
+                    e.1 = r.px;
+                }
                 let st = r.symbol.clone();
                 self.evaluate_all(&st, ctx);
             }
@@ -418,7 +480,7 @@ impl Strategy for WeatherLock {
                            "series": self.cfg.stations.keys().cloned().chain(std::iter::once("KXRAIN".to_string())).collect::<Vec<_>>(),
                            "rain_markets": self.rain_markets.len(),
                            "rain_today_mm": self.rain.iter().filter(|(_, (_, mm))| *mm > 0.0).map(|(s, (_, mm))| serde_json::json!({"station": s, "mm": mm})).collect::<Vec<_>>(),
-                           "running_max": self.run_max.iter().map(|(s, (d, m))| serde_json::json!({"station": s, "day": d, "max_f": m})).collect::<Vec<_>>(),
+                           "running_max": self.run_max.iter().map(|(s, (d, m))| serde_json::json!({"station": s, "day": d, "max_f": m, "min_f": self.run_min.get(s).map(|(_, v)| *v)})).collect::<Vec<_>>(),
                            "markets": self.markets.iter().map(|(t, m)| serde_json::json!({"ticker": t, "series": m.series, "close_ts_ms": m.close_ts_ms, "lo": m.lo, "hi": m.hi})).collect::<Vec<_>>()})
     }
 }
