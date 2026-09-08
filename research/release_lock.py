@@ -1,35 +1,36 @@
-"""Economics settlement lock: scheduled releases (CPI, jobs, PCE, GDP at 12:30 UTC;
-Fed decisions at 18:00 UTC) decide their Kalshi ladders instantly. How many
-seconds does the tape take to reprice, and what edge was available in the
-first 5 / 30 / 120 s after the print?
+"""Economics settlement lock with the OFFICIAL release calendars.
 
-Method: for each settled economics market whose tape contains trades on a
-weekday inside the release window, take the first release-window day with a
-large move as the release; measure the price path from the release second.
+Scheduled prints decide their Kalshi ladders instantly. For every settled
+market whose life spans one of its release timestamps, measure how the tape
+repriced after the exact second of the print: seconds to first trade, the
+price path at +5/+30/+120 s, and the edge available buying the eventual winner
+at the first post-release print.
 
-Usage: python research/release_lock.py [--days 120]
-Standard library only; ~1 request per market page, paced.
+Calendars are scraped from the agencies (no key):
+  BLS   https://www.bls.gov/schedule/news_release/{cpi,empsit,ppi}.htm   (08:30 ET)
+  BEA   https://www.bea.gov/news/schedule                                   (08:30 ET)
+  FOMC  https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm    (14:00 ET)
+
+Usage: python research/release_lock.py [--days 150]
 """
 import json
+import re
 import sys
 import time
 import urllib.request
-from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 K = "https://external-api.kalshi.com/trade-api/v2"
-WINDOWS = {  # series prefix -> (release hour UTC, minute)
-    "KXCPI": (12, 30), "KXCPIYOY": (12, 30), "KXCPICOREYOY": (12, 30), "KXCOREPCE": (12, 30), "KXPCECORE": (12, 30), "KXPAYROLLS": (12, 30),
-    "KXUNEMPLOYMENT": (12, 30), "KXU3": (12, 30), "KXGDP": (12, 30), "KXRETAIL": (12, 30), "KXPPI": (12, 30), "KXJOBS": (12, 30), "KXNFP": (12, 30),
-    "KXFEDDECISION": (18, 0), "KXFED": (18, 0),
-}
+MONTHS = {m: i for i, m in enumerate(["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"], 1)}
+MON3 = {m[:3]: i for m, i in MONTHS.items()}
 
 
-def get(url, tries=6, pause=0.4):
+def get(url, tries=6, pause=0.4, headers=None):
+    req = urllib.request.Request(url, headers=headers or {"User-Agent": "Mozilla/5.0 (research script)"})
     for i in range(tries):
         try:
-            with urllib.request.urlopen(url, timeout=30) as r:
-                d = json.load(r)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                d = r.read().decode(errors="ignore")
             time.sleep(pause)
             return d
         except Exception as e:  # noqa: BLE001
@@ -38,90 +39,145 @@ def get(url, tries=6, pause=0.4):
     raise last
 
 
+def et_to_utc(y, m, d, hh, mm):
+    """US Eastern → UTC (DST: second Sunday of March .. first Sunday of November)."""
+    dt = datetime(y, m, d, hh, mm)
+    mar = datetime(y, 3, 8) + timedelta(days=(6 - datetime(y, 3, 8).weekday()) % 7)
+    nov = datetime(y, 11, 1) + timedelta(days=(6 - datetime(y, 11, 1).weekday()) % 7)
+    off = 4 if mar <= dt < nov else 5
+    return (dt + timedelta(hours=off)).replace(tzinfo=timezone.utc)
+
+
+def bls_dates(page):
+    html = get(f"https://www.bls.gov/schedule/news_release/{page}.htm")
+    out = set()
+    for m in re.finditer(r"([A-Z][a-z]+)\.?\s+(\d{1,2}),\s+(\d{4})", html):
+        mon = MONTHS.get(m.group(1).lower()) or MON3.get(m.group(1).lower()[:3])
+        if mon:
+            out.add(et_to_utc(int(m.group(3)), mon, int(m.group(2)), 8, 30))
+    return out
+
+
+def bea_dates():
+    html = get("https://www.bea.gov/news/schedule")
+    out = {"pce": set(), "gdp": set()}
+    # rows like: "July 31, 2026 ... Personal Income and Outlays, June 2026" / "Gross Domestic Product ..."
+    for block in re.split(r"<tr", html):
+        m = re.search(r"([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})", block)
+        if not m:
+            continue
+        mon = MONTHS.get(m.group(1).lower())
+        if not mon:
+            continue
+        ts = et_to_utc(int(m.group(3)), mon, int(m.group(2)), 8, 30)
+        low = block.lower()
+        if "personal income" in low:
+            out["pce"].add(ts)
+        if "gross domestic product" in low or "gdp" in low:
+            out["gdp"].add(ts)
+    return out
+
+
+def fomc_dates():
+    html = get("https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm")
+    out = set()
+    # "January 27-28" style within a year section
+    for ysec in re.split(r"(?=<h4[^>]*>\s*(?:19|20)\d\d)", html):
+        ym = re.search(r"((?:19|20)\d\d)", ysec)
+        if not ym:
+            continue
+        y = int(ym.group(1))
+        for m in re.finditer(r"<strong>([A-Z][a-z]+)(?:/[A-Z][a-z]+)?</strong>\s*(?:<[^>]+>\s*)*(\d{1,2})(?:-(\d{1,2}))?", ysec):
+            mon = MONTHS.get(m.group(1).lower())
+            if not mon:
+                continue
+            day = int(m.group(3) or m.group(2))  # second day of a two-day meeting
+            out.add(et_to_utc(y, mon, day, 14, 0))
+    return out
+
+
 def trades(ticker):
     out, cur = [], ""
     while True:
-        d = get(f"{K}/markets/trades?ticker={ticker}&limit=1000" + (f"&cursor={cur}" if cur else ""))
+        d = json.loads(get(f"{K}/markets/trades?ticker={ticker}&limit=1000" + (f"&cursor={cur}" if cur else "")))
         out.extend(d.get("trades", []))
         cur = d.get("cursor", "")
-        if not cur or not d.get("trades") or len(out) > 20000:
+        if not cur or not d.get("trades") or len(out) > 30000:
             break
-    rows = []
-    for t in out:
-        ts = datetime.fromisoformat(t["created_time"].replace("Z", "+00:00"))
-        rows.append((ts, float(t["yes_price_dollars"]), float(t["count_fp"])))
+    rows = [(datetime.fromisoformat(t["created_time"].replace("Z", "+00:00")), float(t["yes_price_dollars"]), float(t["count_fp"])) for t in out]
     rows.sort()
     return rows
 
 
+SERIES = {  # prefix -> calendar key
+    "KXCPI": "cpi", "KXCPIYOY": "cpi", "KXCPICORE": "cpi", "KXCPICOREYOY": "cpi", "KXECONSTATCPI": "cpi",
+    "KXPAYROLLS": "empsit", "KXUNEMPLOYMENT": "empsit", "KXU3": "empsit", "KXNFP": "empsit", "KXJOBS": "empsit",
+    "KXPPI": "ppi", "KXPCECORE": "pce", "KXCOREPCE": "pce", "KXPCE": "pce", "KXGDP": "gdp",
+    "KXFEDDECISION": "fomc", "KXFED": "fomc", "KXLARGECUT": "fomc",
+}
+
+
 def main():
-    days = int(sys.argv[sys.argv.index("--days") + 1]) if "--days" in sys.argv else 120
+    days = int(sys.argv[sys.argv.index("--days") + 1]) if "--days" in sys.argv else 150
     since = int(time.time()) - days * 86400
-    series = get(f"{K}/series?category=Economics&limit=1000").get("series", [])
-    series += get(f"{K}/series?category=Financials&limit=1000").get("series", [])
-    cands = [s for s in series if any(s["ticker"].startswith(p) for p in WINDOWS)]
-    print(f"{len(cands)} release-driven series")
+    cal = {"cpi": bls_dates("cpi"), "empsit": bls_dates("empsit"), "ppi": bls_dates("ppi")}
+    bea = bea_dates()
+    cal["pce"], cal["gdp"] = bea["pce"], bea["gdp"]
+    cal["fomc"] = fomc_dates()
+    for k, v in cal.items():
+        recent = sorted(t for t in v if t.timestamp() >= since)
+        print(f"calendar {k}: {len(v)} dates, recent: {[t.strftime('%m-%d %H:%MZ') for t in recent[:6]]}")
+    series = json.loads(get(f"{K}/series?category=Economics&limit=1000")).get("series", []) + json.loads(get(f"{K}/series?category=Financials&limit=1000")).get("series", [])
     events = []
-    for s in cands:
-        hh, mm = next(v for p, v in WINDOWS.items() if s["ticker"].startswith(p))
-        ms = get(f"{K}/markets?series_ticker={s['ticker']}&status=settled&min_close_ts={since}&limit=200&mve_filter=exclude").get("markets", [])
-        ms = [m for m in ms if m.get("result") in ("yes", "no") and float(m.get("volume_fp") or 0) >= 300]
-        for m in ms[:25]:
+    for s in series:
+        key = next((v for p, v in SERIES.items() if s["ticker"] == p or s["ticker"].startswith(p)), None)
+        if not key or not cal.get(key):
+            continue
+        ms = json.loads(get(f"{K}/markets?series_ticker={s['ticker']}&status=settled&min_close_ts={since}&limit=200&mve_filter=exclude")).get("markets", [])
+        ms = [m for m in ms if m.get("result") in ("yes", "no") and float(m.get("volume_fp") or 0) >= 200]
+        for m in ms[:30]:
+            open_t = datetime.fromisoformat(m["open_time"].replace("Z", "+00:00"))
+            close_t = datetime.fromisoformat(m["close_time"].replace("Z", "+00:00"))
+            rel = [t for t in cal[key] if open_t < t < close_t + timedelta(hours=1)]
+            if not rel:
+                continue
+            t0 = max(rel)  # the last scheduled print before close decides it
             try:
                 tp = trades(m["ticker"])
             except Exception as e:  # noqa: BLE001
                 print("  tape failed", m["ticker"], e)
                 continue
-            if len(tp) < 30:
-                continue
-            y = 1.0 if m["result"] == "yes" else 0.0
-            # candidate release days: weekdays with trades inside [hh:mm, hh:mm+10min)
-            by_day = defaultdict(list)
-            for ts, px, q in tp:
-                if ts.weekday() < 5 and (ts.hour, ts.minute) >= (hh, mm) and (ts.hour * 60 + ts.minute) < hh * 60 + mm + 10:
-                    by_day[ts.date()].append((ts, px, q))
-            best = None
-            for d, win in by_day.items():
-                pre = [px for ts, px, q in tp if ts < datetime(d.year, d.month, d.day, hh, mm, tzinfo=timezone.utc) and (datetime(d.year, d.month, d.day, hh, mm, tzinfo=timezone.utc) - ts).total_seconds() < 3600]
-                if not pre:
-                    continue
-                pre_px = pre[-1]
-                post = [px for ts, px, q in win]
-                move = max(abs(p - pre_px) for p in post)
-                if best is None or move > best[0]:
-                    best = (move, d, pre_px, win)
-            if not best or best[0] < 0.15:
-                continue
-            move, d, pre_px, win = best
-            t0 = datetime(d.year, d.month, d.day, hh, mm, tzinfo=timezone.utc)
+            pre = [px for ts, px, q in tp if ts < t0 and (t0 - ts).total_seconds() < 6 * 3600]
             after = [(ts, px, q) for ts, px, q in tp if ts >= t0 and (ts - t0).total_seconds() <= 3600]
+            if not pre or not after:
+                continue
+            pre_px = pre[-1]
+            y = 1.0 if m["result"] == "yes" else 0.0
 
             def px_at(secs):
                 pts = [px for ts, px, q in after if (ts - t0).total_seconds() <= secs]
                 return pts[-1] if pts else None
 
-            def captured(secs):
-                p = px_at(secs)
-                return None if p is None else (p - pre_px) / (y - pre_px) if abs(y - pre_px) > 0.05 else None
-
-            first = after[0] if after else None
-            edge_first = None
-            if first:
-                fp = first[1]
-                edge_first = (y - fp) if y == 1.0 else (fp - y)  # buying the eventual winner at the first post-release print
-            events.append((m["ticker"], str(d), pre_px, y, (first[0] - t0).total_seconds() if first else None, px_at(5), px_at(30), px_at(120), captured(5), captured(30), captured(120), edge_first))
-            print(f"  {m['ticker']:<34} {d} pre {pre_px:.2f} → settle {y:.0f} | first print +{(first[0]-t0).total_seconds():.0f}s at {first[1]:.2f} | 5s {px_at(5)} 30s {px_at(30)} 120s {px_at(120)} | buy winner at first print: {edge_first:+.2f}")
+            first = after[0]
+            edge_first = (y - first[1]) if y == 1.0 else (first[1] - y)
+            # prints on the losing side within the first 5 minutes: size-weighted edge available to a fast trader
+            wrong = [(px, q) for ts, px, q in after if (ts - t0).total_seconds() <= 300 and ((y == 1.0 and px < 0.9) or (y == 0.0 and px > 0.1))]
+            wrong_qty = sum(q for _, q in wrong)
+            wrong_edge = (sum(((1 - px) if y == 1.0 else px) * q for px, q in wrong) / wrong_qty) if wrong_qty else 0.0
+            events.append({"ticker": m["ticker"], "release": t0.isoformat(), "pre_px": pre_px, "settle": y, "first_print_secs": (first[0] - t0).total_seconds(), "first_px": first[1],
+                           "px_5s": px_at(5), "px_30s": px_at(30), "px_120s": px_at(120), "edge_first_print": edge_first, "wrong_side_qty_5min": wrong_qty, "wrong_side_edge": wrong_edge})
+            print(f"  {m['ticker']:<32} {t0.strftime('%m-%d %H:%M')}Z pre {pre_px:.2f}→{y:.0f} | 1st print +{(first[0]-t0).total_seconds():5.0f}s @{first[1]:.2f} | +30s {px_at(30)} +120s {px_at(120)} | losing-side prints in 5 min: {wrong_qty:6.0f} contracts, avg edge {wrong_edge:.2f}")
     if events:
-        def med(vals):
-            v = sorted(x for x in vals if x is not None)
+        def med(v):
+            v = sorted(x for x in v if x is not None)
             return v[len(v) // 2] if v else None
-        print(f"\n{len(events)} release events")
-        print(f"median seconds to first post-release print: {med([e[4] for e in events])}")
-        print(f"median share of move captured by 5s: {med([e[8] for e in events])}, 30s: {med([e[9] for e in events])}, 120s: {med([e[10] for e in events])}")
-        ef = [e[11] for e in events if e[11] is not None]
-        print(f"buying the eventual winner at the FIRST post-release print: mean edge {sum(ef)/len(ef):+.3f}/contract over {len(ef)} events, win {sum(1 for x in ef if x>0)/len(ef):.0%}")
+        print(f"\n{len(events)} release events aligned to official calendars")
+        print(f"median seconds to first print after release: {med([e['first_print_secs'] for e in events]):.0f}")
+        print(f"median edge buying the winner at the first print: {med([e['edge_first_print'] for e in events]):+.3f}")
+        tot_q = sum(e['wrong_side_qty_5min'] for e in events)
+        print(f"losing-side prints in the first 5 min: {tot_q:.0f} contracts across {sum(1 for e in events if e['wrong_side_qty_5min']>0)} events; size-weighted edge {sum(e['wrong_side_edge']*e['wrong_side_qty_5min'] for e in events)/tot_q if tot_q else 0:+.3f}")
         with open("reports/release-lock.json", "w") as f:
-            json.dump({"kind": "release-lock", "created_ms": int(time.time() * 1000), "events": [dict(zip(["ticker", "day", "pre_px", "settle", "first_print_secs", "px_5s", "px_30s", "px_120s", "cap_5s", "cap_30s", "cap_120s", "edge_first_print"], e)) for e in events]}, f, indent=1)
+            json.dump({"kind": "release-lock", "created_ms": int(time.time() * 1000), "events": events}, f, indent=1)
 
 
 if __name__ == "__main__":
