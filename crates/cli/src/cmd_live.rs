@@ -52,6 +52,13 @@ pub struct FeedArgs {
     /// settlement index with its official running 60 s average. Needs API keys.
     #[arg(long)]
     pub index_feed: bool,
+    /// With --all-open: only stream quotes for markets closing within this many seconds
+    /// (the longest rule horizon plus slack). Keeps the subscription to a few thousand markets.
+    #[arg(long, default_value_t = 30 * 3600)]
+    pub horizon_max_secs: i64,
+    /// With --all-open: fetch the open price (one request per market) only for these categories
+    #[arg(long = "open-px-category", default_values_t = vec!["Economics".to_string()])]
+    pub open_px_categories: Vec<String>,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -152,18 +159,18 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
     // Kalshi: discovery + (ws | poll)
     let (wtx, wrx) = watch::channel::<Vec<String>>(Vec::new());
     if a.all_open {
-        // exchange-wide touch feed: ticker + trade channels without a ticker list
+        // exchange-wide discovery; the touch feed subscribes explicitly to markets that can
+        // still trigger a rule (closing within `horizon_max`), added dynamically as they appear
         if authenticated {
             let ws = KalshiWs::from_env()?;
             let txc = tx.clone();
-            let (_static_tx, static_rx) = watch::channel::<Vec<String>>(Vec::new());
             let mut channels = vec![Channel::Ticker, Channel::Trade];
             if with_fills {
                 channels.push(Channel::Fill);
             }
             tokio::spawn(async move {
-                if let Err(e) = ws.run_dynamic(&channels, static_rx, txc).await {
-                    warn!(error = %e, "kalshi ws (all markets) task ended");
+                if let Err(e) = ws.run_dynamic(&channels, wrx, txc).await {
+                    warn!(error = %e, "kalshi ws (all-open) task ended");
                 }
             });
         }
@@ -171,8 +178,10 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
         let txc = tx.clone();
         let cats = a.categories.clone();
         let discover = Duration::from_secs(a.discover_secs.max(30));
+        let horizon_max = a.horizon_max_secs;
+        let open_px_cats = a.open_px_categories.clone();
         tokio::spawn(async move {
-            if let Err(e) = discovery_all_open(client, cats, txc, discover).await {
+            if let Err(e) = discovery_all_open(client, cats, txc, wtx, discover, horizon_max, open_px_cats).await {
                 warn!(error = %e, "kalshi all-open discovery ended");
             }
         });
@@ -317,8 +326,9 @@ async fn discovery_loop(
                                 .await;
                             known.remove(&t);
                             last_trade_ts.remove(&t);
-                        } else if now > info.close_ts_ms + 30 * 60_000 {
-                            warn!(ticker = %t, status = %info.status, "not settled 30 min after close; dropping");
+                        } else if now > info.close_ts_ms + 48 * 3_600_000 {
+                            // weather/climate markets finalize hours after close; give up only after 2 days
+                            warn!(ticker = %t, status = %info.status, "not settled 48 h after close; dropping");
                             settled.insert(t.clone());
                             ignored.insert(t.clone());
                             known.remove(&t);
@@ -398,7 +408,15 @@ async fn discovery_loop(
 /// list, open price from the first hourly candle after open (only for markets that
 /// opened more than an hour ago). Emits Market events for new markets and Settlement
 /// for tracked markets that resolve.
-async fn discovery_all_open(client: KalshiClient, categories: Vec<String>, tx: mpsc::Sender<MarketEvent>, every: Duration) -> Result<()> {
+async fn discovery_all_open(
+    client: KalshiClient,
+    categories: Vec<String>,
+    tx: mpsc::Sender<MarketEvent>,
+    wtx: watch::Sender<Vec<String>>,
+    every: Duration,
+    horizon_max_secs: i64,
+    open_px_categories: Vec<String>,
+) -> Result<()> {
     // series -> category
     let mut cat_of: HashMap<String, String> = HashMap::new();
     let cats: Vec<String> = if categories.is_empty() {
@@ -448,9 +466,9 @@ async fn discovery_all_open(client: KalshiClient, categories: Vec<String>, tx: m
                 if known.contains_key(&info.ticker) {
                     continue;
                 }
-                // open price: first hourly candle after open (cheap, once per market)
+                // open price: first hourly candle after open (one request per market — only where drift rules apply)
                 let now_s = chrono::Utc::now().timestamp();
-                if info.open_ts_ms > 0 && now_s - info.open_ts_ms / 1000 > 3600 {
+                if open_px_categories.contains(cat) && info.open_ts_ms > 0 && now_s - info.open_ts_ms / 1000 > 3600 {
                     let o = info.open_ts_ms / 1000;
                     if let Ok(cs) = client.get_candlesticks(&info.series, &info.ticker, o, o + 6 * 3600, 60).await {
                         if let Some(c) = cs.iter().find(|c| c.price.close_dollars.is_some() || c.yes_bid.close_dollars.is_some()) {
@@ -471,12 +489,23 @@ async fn discovery_all_open(client: KalshiClient, categories: Vec<String>, tx: m
             }
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
-        info!(open_markets = seen_now.len(), tracked = known.len(), "all-open discovery pass");
-        // settlement checks for tracked markets that dropped out of the open set past close
+        // stream quotes only for markets that can still trigger a rule
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut soon: Vec<String> = known
+            .iter()
+            .filter(|(_, m)| m.close_ts_ms > now_ms && m.close_ts_ms - now_ms <= horizon_max_secs * 1000)
+            .map(|(t, _)| t.clone())
+            .collect();
+        soon.sort();
+        let _ = wtx.send(soon.clone());
+        info!(open_markets = seen_now.len(), tracked = known.len(), streaming = soon.len(), "all-open discovery pass");
+        // settlement checks for tracked markets past close (kept for up to 48 h — weather
+        // buckets finalize hours after close)
         let now = chrono::Utc::now().timestamp_millis();
+        known.retain(|_, m| !(m.close_ts_ms > 0 && now > m.close_ts_ms + 48 * 3_600_000));
         let past: Vec<String> = known
             .iter()
-            .filter(|(t, m)| !seen_now.contains(*t) && m.close_ts_ms > 0 && now > m.close_ts_ms && !settled.contains(*t))
+            .filter(|(t, m)| m.close_ts_ms > 0 && now > m.close_ts_ms + 60_000 && !settled.contains(*t))
             .map(|(t, _)| t.clone())
             .take(50)
             .collect();
