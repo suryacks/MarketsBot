@@ -137,6 +137,27 @@ Recorded books enable `mbot backtest --mode book --data data/live`.
 spot (single prints imply >1000 % vol); it is kept as a rolling median for research
 (`vol_source = "implied" | "max" | "mean"`) but does not beat realized vol in calibration.
 
+## The alpha search (2026-09-08)
+
+Everything runs through one pipeline — **backtest on history → paper on live books → live with a
+$100 cap** — and the dashboard's Strategy Lab tab is the scoreboard.
+
+| tool | what it does |
+|---|---|
+| `mbot build-dataset` | every liquid series across all categories, settled markets, full price paths (250 series / 21k markets) |
+| `mbot universe` | ~130k parametrized strategies in 17 families (price buckets, side bias, momentum, reversal, breakout, drift, time filters, ladder relative value, bucket sums, volume surge, spread regime, market age, path vol, interactions, news tone/volume, peer drift), walk-forward scored |
+| `mbot build-news` | GDELT tone/volume features for news-driven markets (sentiment families) |
+| `mbot lab` | hand-built strategies × markets: crypto fair value (taker/maker/endgame), order-flow imbalance, weather market-making on recorded books |
+| `mbot paper --strategy rules` | trades universe PASS rules on every open market |
+| `mbot paper --strategy weather-lock --nws-obs` | buys daily-high buckets the moment the day's running max decides them |
+| `research/*.py` | one-off studies: weather forecasts, release speed, cross-venue lag, settlement lock |
+
+Findings so far: the only out-of-sample survivor across the universe is *buy 90–100¢ favorites hours
+before close* (+1.5–2¢/contract, tail risk unmeasured). Crypto fair value, order flow, forecasts,
+cross-venue lag and every path/structure family are priced in. Open questions being paper-traded:
+the crypto endgame on Kalshi's official index feed, thin-book weather market-making, and the
+weather settlement lock.
+
 ## Fees
 
 Kalshi: `fee = ceil_to_cent(0.07 × contracts × P × (1−P))` per fill for taker; series with
