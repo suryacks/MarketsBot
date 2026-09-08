@@ -51,6 +51,8 @@ pub struct RuleTraderConfig {
     pub max_positions: usize,
     /// How far around the horizon a market is eligible (fraction of horizon, min 60 s).
     pub window_frac: f64,
+    /// Max markets traded per event (adjacent strikes of one event win or lose together).
+    pub max_per_event: usize,
 }
 
 impl Default for RuleTraderConfig {
@@ -60,6 +62,7 @@ impl Default for RuleTraderConfig {
             stake: 2.0,
             max_positions: 40,
             window_frac: 0.15,
+            max_per_event: 2,
         }
     }
 }
@@ -146,6 +149,7 @@ impl RuleTraderConfig {
 struct Mkt {
     series: String,
     category: String,
+    event: String,
     close_ts_ms: i64,
     open_px: Option<f64>,
 }
@@ -154,6 +158,8 @@ pub struct RuleTrader {
     cfg: RuleTraderConfig,
     markets: HashMap<String, Mkt>,
     traded: HashSet<(usize, String)>,
+    /// markets already entered per event ticker
+    per_event: HashMap<String, usize>,
     positions_open: usize,
     pub orders: u64,
     pub evaluations: u64,
@@ -165,6 +171,7 @@ impl RuleTrader {
             cfg,
             markets: HashMap::new(),
             traded: HashSet::new(),
+            per_event: HashMap::new(),
             positions_open: 0,
             orders: 0,
             evaluations: 0,
@@ -189,6 +196,12 @@ impl RuleTrader {
             return; // one-sided / illiquid
         }
         self.evaluations += 1;
+        if ctx.position(ticker).yes_qty.abs().to_f64() > 0.0 || self.traded.iter().any(|(_, t)| t == ticker) {
+            return; // one position per market, ever
+        }
+        if self.per_event.get(&m.event).copied().unwrap_or(0) >= self.cfg.max_per_event {
+            return;
+        }
         let mut to_submit = Vec::new();
         for (i, rule) in self.cfg.rules.iter().enumerate() {
             if self.traded.contains(&(i, ticker.to_string())) || !Self::applies(rule, &m) {
@@ -224,9 +237,11 @@ impl RuleTrader {
             req.qty = Fp::from_int(qty as i64);
             req.tag = if rule.side == "BuyYes" { "rule_buy_yes" } else { "rule_buy_no" };
             to_submit.push((i, req));
+            break; // first matching rule wins; never stack rules on one market
         }
         for (i, req) in to_submit {
             self.traded.insert((i, ticker.to_string()));
+            *self.per_event.entry(m.event.clone()).or_default() += 1;
             ctx.submit(req);
             self.orders += 1;
             self.positions_open += 1;
@@ -244,6 +259,7 @@ impl Strategy for RuleTrader {
                 let e = self.markets.entry(m.ticker.clone()).or_insert(Mkt {
                     series: m.series.clone(),
                     category: m.category.clone(),
+                    event: if m.event_ticker.is_empty() { m.ticker.clone() } else { m.event_ticker.clone() },
                     close_ts_ms: m.close_ts_ms,
                     open_px: m.open_px.map(|p| p.to_f64()),
                 });
@@ -262,8 +278,13 @@ impl Strategy for RuleTrader {
                 }
             }
             MarketEvent::Settlement { ticker, .. } => {
-                if self.markets.remove(ticker).is_some() && self.traded.iter().any(|(_, t)| t == ticker) {
+                if let Some(m) = self.markets.remove(ticker)
+                    && self.traded.iter().any(|(_, t)| t == ticker)
+                {
                     self.positions_open = self.positions_open.saturating_sub(1);
+                    if let Some(n) = self.per_event.get_mut(&m.event) {
+                        *n = n.saturating_sub(1);
+                    }
                 }
             }
             _ => {}
