@@ -159,6 +159,11 @@ impl WeatherLock {
                 continue;
             }
             tracing::info!(ticker = %t, station, nowcast_mm = mm, ask = %ask, "RAIN NOWCAST trade");
+            // `traded` dies with the process; the exchange position is what survives a restart.
+            if !ctx.position(&t).yes_qty.is_zero() {
+                self.traded.insert(t);
+                continue;
+            }
             ctx.submit(OrderRequest::buy_yes(&t, ask, Fp::from_int(qty as i64), Tif::Ioc).tagged("rain_nowcast"));
             self.traded.insert(t);
             self.orders += 1;
@@ -204,6 +209,11 @@ impl WeatherLock {
                 continue;
             }
             tracing::info!(ticker = %t, station, hrrr_max = hmax, bid = %bid, "HRRR trade (bucket out of reach)");
+            // `traded` dies with the process; the exchange position is what survives a restart.
+            if !ctx.position(&t).yes_qty.is_zero() {
+                self.traded.insert(t);
+                continue;
+            }
             ctx.submit(OrderRequest::sell_yes(&t, bid, Fp::from_int(qty as i64), Tif::Ioc).tagged("hrrr_no"));
             self.traded.insert(t);
             self.orders += 1;
@@ -244,6 +254,11 @@ impl WeatherLock {
                 continue;
             }
             tracing::info!(ticker = %t, station, precip_mm = mm, ask = %ask, "RAIN LOCK trade");
+            // `traded` dies with the process; the exchange position is what survives a restart.
+            if !ctx.position(&t).yes_qty.is_zero() {
+                self.traded.insert(t);
+                continue;
+            }
             ctx.submit(OrderRequest::buy_yes(&t, ask, Fp::from_int(qty as i64), Tif::Ioc).tagged("rain_lock_yes"));
             self.traded.insert(t);
             self.orders += 1;
@@ -313,6 +328,11 @@ impl WeatherLock {
                 OrderRequest::sell_yes(&t, bid, Fp::from_int(qty as i64), Tif::Ioc).tagged("wx_lock_no")
             };
             tracing::info!(ticker = %t, station, running_max = mx, lo = m.lo, hi = m.hi, "WEATHER LOCK trade");
+            // `traded` dies with the process; the exchange position is what survives a restart.
+            if !ctx.position(&t).yes_qty.is_zero() {
+                self.traded.insert(t);
+                continue;
+            }
             ctx.submit(req);
             self.traded.insert(t);
             self.orders += 1;

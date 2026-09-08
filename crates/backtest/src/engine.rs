@@ -69,17 +69,21 @@ impl Backtester {
             .values()
             .filter(|p| !p.yes_qty.is_zero() || p.n_fills > 0)
             .map(|p| {
-                let mid = self.sim.book(&p.ticker).and_then(|b| b.mid());
-                let mtm = mid.map(|m| p.mtm(m)).unwrap_or(p.cash);
+                let bk = self.sim.book(&p.ticker);
+                let mid = bk.and_then(|b| b.mid());
+                let (mark, mtm, value) = mb_core::mark_position(p, mid, bk.and_then(|b| b.best_bid()).map(|(x, _)| x), bk.and_then(|b| b.best_ask()).map(|(x, _)| x));
                 json!({
                     "ticker": p.ticker, "yes_qty": p.yes_qty.to_f64(), "cash": p.cash.to_f64(),
                     "fees": p.fees.to_f64(), "n_fills": p.n_fills, "volume": p.volume.to_f64(),
-                    "mid": mid.map(|m| m.to_f64()), "mtm": mtm.to_f64(),
+                    "mid": mid.map(|m| m.to_f64()), "mark": mark, "mtm": mtm, "value": value,
                     "close_ts_ms": self.close_ts.get(&p.ticker),
                 })
             })
             .collect();
         let unrealized: f64 = positions.iter().map(|p| p["mtm"].as_f64().unwrap_or(0.0)).sum();
+        // Equity is cash plus what the open positions are WORTH, not cash plus their P&L:
+        // the purchase already left `cash`, so adding P&L would deduct it a second time.
+        let pos_value: f64 = positions.iter().map(|p| p["value"].as_f64().unwrap_or(0.0)).sum();
         let settled: Vec<serde_json::Value> = self
             .sim
             .settled
@@ -128,7 +132,7 @@ impl Backtester {
             "started_ms": started_ms, "updated_ms": now,
             "initial_cash": initial_cash.to_f64(), "cash": self.sim.total_cash().to_f64(), "free_cash": self.sim.free_cash().to_f64(),
             "settled_pnl": settled_pnl, "unrealized": unrealized,
-            "equity": self.sim.total_cash().to_f64() + unrealized,
+            "equity": self.sim.total_cash().to_f64() + pos_value,
             "n_fills": self.fills.len(), "markets_seen": self.markets_seen,
             "settled_count": settled.len(), "settled_wins": wins,
             "positions": positions, "settled": settled, "fills": fills, "open_orders": open_orders, "books": books,

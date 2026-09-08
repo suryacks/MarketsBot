@@ -167,3 +167,21 @@ pub trait Strategy: Send {
         serde_json::Value::Null
     }
 }
+
+/// Mark an open position: `(mark, unrealized_pnl, market_value)`.
+///
+/// The mark is the mid when both sides are quoted, otherwise whichever side is
+/// quoted, otherwise the position's own average entry price — marking a position
+/// we cannot see at zero would report a total loss on a market that has merely
+/// stopped quoting. `market_value` is what the position is worth (negative for a
+/// short); equity is cash + market_value. `unrealized_pnl` is value minus what we
+/// paid, and must never be added to cash, which has already paid for the position.
+pub fn mark_position(p: &Position, mid: Option<Fp>, bid: Option<Fp>, ask: Option<Fp>) -> (Option<f64>, f64, f64) {
+    let q = p.yes_qty.to_f64();
+    let entry = if q.abs() > 1e-9 { Some((-p.cash.to_f64() / q).clamp(0.0, 1.0)) } else { None };
+    let mark = mid.map(|m| m.to_f64()).or_else(|| bid.map(|b| b.to_f64())).or_else(|| ask.map(|a| a.to_f64())).or(entry);
+    match mark {
+        Some(m) => (Some(m), p.cash.to_f64() + q * m, q * m),
+        None => (None, 0.0, 0.0),
+    }
+}

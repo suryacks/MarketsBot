@@ -11,5 +11,5 @@ pub mod types;
 pub use book::{Orderbook, Sweep};
 pub use fees::FeeModel;
 pub use fp::Fp;
-pub use strategy::{Action, Context, Fill, OrderId, OrderRequest, Position, Strategy, Tif};
+pub use strategy::{mark_position, Action, Context, Fill, OrderId, OrderRequest, Position, Strategy, Tif};
 pub use types::{BookSide, MarketEvent, MarketInfo, Outcome, RefPrice, Trade, UserFill, Venue};

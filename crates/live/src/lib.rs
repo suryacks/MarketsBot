@@ -193,21 +193,60 @@ impl KalshiExecutor {
         pos + orders
     }
 
+    /// `(mark, unrealized_pnl, liquidation_value)` for one live position.
+    ///
+    /// `liquidation_value` follows the exchange, not the simulator. Kalshi debits the
+    /// full $1 collateral when a short is opened, so the balance we mirror is already
+    /// net of it and a short YES position is worth `qty × (1 − mark)` on top of that
+    /// balance. Valuing it at `qty × mark` (the simulator's convention, where the
+    /// premium was credited instead) would understate equity by the collateral and
+    /// could trip the kill switch on a position that has not lost a cent.
+    fn marked(&self, p: &mb_core::Position) -> (Option<f64>, f64, f64) {
+        let bk = self.books.get(&p.ticker);
+        let (mark, pnl, _) = mb_core::mark_position(p, bk.and_then(|b| b.mid()), bk.and_then(|b| b.best_bid()).map(|(x, _)| x), bk.and_then(|b| b.best_ask()).map(|(x, _)| x));
+        let q = p.yes_qty.to_f64();
+        let value = match mark {
+            Some(m) if q < 0.0 => -q * (1.0 - m),
+            Some(m) => q * m,
+            None => 0.0,
+        };
+        (mark, pnl, value)
+    }
+
+    /// Cash movement in the exchange's own convention (see `marked`): opening a short
+    /// costs collateral rather than crediting the premium, and closing one returns it.
+    fn exchange_cash_delta(&self, fill: &Fill, prior_qty: Fp) -> f64 {
+        let (q, px, prior) = (fill.qty.to_f64(), fill.yes_px.to_f64(), prior_qty.to_f64());
+        let moved = match fill.action {
+            Action::Buy => {
+                let closing = q.min((-prior).max(0.0));
+                closing * (1.0 - px) - (q - closing) * px
+            }
+            Action::Sell => {
+                let closing = q.min(prior.max(0.0));
+                closing * px - (q - closing) * (1.0 - px)
+            }
+        };
+        moved - fill.fee.to_f64()
+    }
+
+    /// Unrealized P&L on open positions.
     pub fn unrealized(&self) -> f64 {
-        self.positions
-            .values()
-            .map(|p| {
-                let mid = self.books.get(&p.ticker).and_then(|b| b.mid());
-                mid.map(|m| p.mtm(m)).unwrap_or(p.cash).to_f64()
-            })
-            .sum()
+        self.positions.values().map(|p| self.marked(p).1).sum()
+    }
+
+    /// What the open positions are worth. Equity = cash + this; cash has already
+    /// paid for them, so adding P&L instead would charge for them twice — and the
+    /// kill switch would see a loss that never happened.
+    pub fn positions_value(&self) -> f64 {
+        self.positions.values().map(|p| self.marked(p).2).sum()
     }
 
     fn check_kill_switch(&mut self) {
         if self.halted {
             return;
         }
-        let equity = self.cash.to_f64() + self.unrealized();
+        let equity = self.cash.to_f64() + self.positions_value();
         if equity - self.initial_cash.to_f64() <= -self.cfg.max_loss {
             error!(equity, initial = %self.initial_cash, "KILL SWITCH: max loss reached — halting and cancelling all orders");
             self.halted = true;
@@ -270,7 +309,8 @@ impl KalshiExecutor {
                     is_maker: !f.is_taker,
                     tag,
                 };
-                self.cash += fill.cash_delta();
+                let prior_qty = self.positions.get(&f.ticker).map(|p| p.yes_qty).unwrap_or_default();
+                self.cash += Fp::from_f64(self.exchange_cash_delta(&fill, prior_qty));
                 let p = self.positions.entry(f.ticker.clone()).or_insert_with(|| Position {
                     ticker: f.ticker.clone(),
                     ..Default::default()
@@ -288,7 +328,9 @@ impl KalshiExecutor {
             }
             MarketEvent::Settlement { ticker, result, .. } => {
                 if let Some(p) = self.positions.remove(ticker) {
-                    let payout = p.settle(*result);
+                    // Winning contracts return $1 each; the loser's collateral is already gone.
+                    let q = p.yes_qty;
+                    let payout = if *result == mb_core::Outcome::Yes { q.max(Fp::from_int(0)) } else { (-q).max(Fp::from_int(0)) };
                     self.cash += payout;
                     info!(ticker, ?result, pnl = %(p.cash + payout), "settled");
                 }
@@ -316,16 +358,18 @@ impl KalshiExecutor {
             .values()
             .map(|p| {
                 let mid = self.books.get(&p.ticker).and_then(|b| b.mid());
+                let (mark, mtm, value) = self.marked(p);
                 json!({"ticker": p.ticker, "yes_qty": p.yes_qty.to_f64(), "cash": p.cash.to_f64(), "fees": p.fees.to_f64(),
                        "n_fills": p.n_fills, "volume": p.volume.to_f64(), "mid": mid.map(|m| m.to_f64()),
-                       "mtm": mid.map(|m| p.mtm(m)).unwrap_or(p.cash).to_f64()})
+                       "mark": mark, "mtm": mtm, "value": value})
             })
             .collect();
         let unreal = self.unrealized();
+        let pos_value = self.positions_value();
         json!({
             "run_id": run_id, "mode": "LIVE", "strategy": strategy_name, "started_ms": started_ms, "updated_ms": self.now_ms,
             "initial_cash": self.initial_cash.to_f64(), "cash": self.cash.to_f64(), "free_cash": (self.cfg.max_notional - self.notional_at_risk()).max(0.0),
-            "settled_pnl": self.cash.to_f64() - self.initial_cash.to_f64(), "unrealized": unreal, "equity": self.cash.to_f64() + unreal,
+            "settled_pnl": self.cash.to_f64() - self.initial_cash.to_f64(), "unrealized": unreal, "equity": self.cash.to_f64() + pos_value,
             "n_fills": self.fills.len(), "settled_count": 0, "settled_wins": 0, "settled": [], "markets_seen": self.books.len(),
             "positions": positions,
             "open_orders": self.orders.iter().map(|(id, o)| json!({"id": id.0, "ticker": o.req.ticker, "action": format!("{:?}", o.req.action), "yes_px": o.req.yes_px.to_f64(), "qty": o.req.qty.to_f64(), "remaining": o.remaining.to_f64(), "ahead": 0, "tag": o.req.tag, "kalshi_id": o.kalshi_id})).collect::<Vec<_>>(),
