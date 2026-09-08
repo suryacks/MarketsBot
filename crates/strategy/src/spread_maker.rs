@@ -58,6 +58,13 @@ impl Default for SpreadMakerConfig {
 }
 
 impl SpreadMakerConfig {
+    /// Cap per-market inventory at ~2 % of the bankroll (worst case $0.50/contract).
+    pub fn scale_to_bankroll(&mut self, bankroll: f64) {
+        let contracts = ((0.02 * bankroll) / 0.5).floor().max(2.0);
+        self.max_inventory = self.max_inventory.min(contracts);
+        self.quote_qty = self.quote_qty.min(self.max_inventory);
+    }
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let s = std::fs::read_to_string(path.as_ref()).with_context(|| format!("reading {}", path.as_ref().display()))?;
         toml::from_str(&s).context("parsing spread maker config")

@@ -465,6 +465,7 @@ pub fn build_strategy(a: &PaperArgs) -> Result<(Box<dyn mb_core::Strategy>, Stri
             if !a.feed.series.is_empty() && a.feed.series != vec!["KXBTC15M".to_string()] {
                 cfg.series = a.feed.series.clone();
             }
+            cfg.scale_to_bankroll(a.bankroll);
             let series = cfg.series.join(",");
             Ok((Box::new(mb_strategy::SpreadMaker::new(cfg)), series))
         }
@@ -482,6 +483,7 @@ pub fn build_strategy(a: &PaperArgs) -> Result<(Box<dyn mb_core::Strategy>, Stri
             if let Some(v) = &a.vol_source {
                 cfg.vol_source = v.clone();
             }
+            cfg.scale_to_bankroll(a.bankroll);
             let series = cfg.series.clone();
             Ok((Box::new(Btc15mStrategy::new(cfg)), series))
         }

@@ -146,6 +146,7 @@ pub fn run_spec(spec: &BacktestSpec, events: &[MarketEvent]) -> Result<BacktestO
             if let Some(e) = spec.edge {
                 cfg.half_spread = e;
             }
+            cfg.scale_to_bankroll(spec.bankroll);
             let p = serde_json::json!({"half_spread": cfg.half_spread, "quote_qty": cfg.quote_qty, "max_inventory": cfg.max_inventory});
             (Box::new(SpreadMaker::new(cfg)), p)
         }
@@ -171,9 +172,9 @@ pub fn run_spec(spec: &BacktestSpec, events: &[MarketEvent]) -> Result<BacktestO
             if let Some(m) = spec.max_entries {
                 cfg.max_entries_per_market = m;
             }
-            // $100 bankroll: scale per-market caps down with it
-            cfg.max_notional_per_market = cfg.max_notional_per_market.min(cfg.notional_frac_of_cash * spec.bankroll);
-            let p = serde_json::json!({"edge": cfg.min_edge, "maker": cfg.maker, "min_tau_secs": cfg.min_tau_secs, "vol_source": cfg.vol_source, "blend": cfg.market_blend, "max_entries": cfg.max_entries_per_market});
+            cfg.scale_to_bankroll(spec.bankroll);
+            let p = serde_json::json!({"edge": cfg.min_edge, "maker": cfg.maker, "min_tau_secs": cfg.min_tau_secs, "vol_source": cfg.vol_source, "blend": cfg.market_blend,
+                                       "max_entries": cfg.max_entries_per_market, "max_contracts_per_market": cfg.max_contracts_per_market, "maker_qty": cfg.maker_qty});
             (Box::new(Btc15mStrategy::new(cfg)), p)
         }
     };

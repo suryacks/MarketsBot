@@ -93,7 +93,10 @@ pub struct LabConfig {
 }
 
 fn verdict(r: &mb_backtest::Report) -> &'static str {
-    if r.markets_traded >= 100 && r.net_pnl > 0.0 && r.t_stat >= 2.0 {
+    let wiped = r.initial_cash > 0.0 && r.net_pnl <= -0.9 * r.initial_cash;
+    if wiped {
+        "FAIL"
+    } else if r.markets_traded >= 100 && r.net_pnl > 0.0 && r.t_stat >= 2.0 {
         "PASS"
     } else if r.markets_traded >= 100 && (r.net_pnl <= 0.0 || r.t_stat < 1.0) {
         "FAIL"

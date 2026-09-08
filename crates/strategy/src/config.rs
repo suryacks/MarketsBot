@@ -109,6 +109,17 @@ impl Default for Btc15mConfig {
 }
 
 impl Btc15mConfig {
+    /// Scale per-market risk caps to a bankroll: at most `notional_frac_of_cash` of it in one
+    /// market, in contracts at a worst-case $0.50 each, and maker quotes no bigger than that.
+    pub fn scale_to_bankroll(&mut self, bankroll: f64) {
+        let per_market = (self.notional_frac_of_cash * bankroll).max(1.0);
+        self.max_notional_per_market = self.max_notional_per_market.min(per_market);
+        let contracts = (per_market / 0.5).floor().max(1.0);
+        self.max_contracts_per_market = self.max_contracts_per_market.min(contracts);
+        self.max_order_qty = self.max_order_qty.min(contracts);
+        self.maker_qty = self.maker_qty.min((contracts / 2.0).floor().max(1.0));
+    }
+
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let s = std::fs::read_to_string(path.as_ref()).with_context(|| format!("reading {}", path.as_ref().display()))?;
         toml::from_str(&s).context("parsing strategy config")
