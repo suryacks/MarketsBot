@@ -39,6 +39,25 @@ def main():
         print("no markets in", series, "closing within 8 h"); return
     watch = ms[:4]
     print("watching:", [(m["ticker"], m["title"][:50]) for m in watch])
+    # third leg: Polymarket's market for the same games (match on team names in the question)
+    poly = {}
+    try:
+        evs = get("https://gamma-api.polymarket.com/events?limit=100&active=true&closed=false&order=volume24hr&ascending=false")
+        for m in watch:
+            words = [w for w in m["title"].replace("wins", "").split() if len(w) > 3]
+            for e in evs:
+                for pm in e.get("markets", []):
+                    q = pm.get("question", "")
+                    if all(w.lower() in q.lower() for w in words[:2]):
+                        toks = json.loads(pm.get("clobTokenIds", "[]") or "[]")
+                        if toks:
+                            poly[m["ticker"]] = (q[:50], toks[0])
+                            break
+                if m["ticker"] in poly:
+                    break
+    except Exception as ex:  # noqa: BLE001
+        print("polymarket lookup failed", ex)
+    print("polymarket twins:", poly)
     out = open(f"reports/ingame-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}.jsonl", "w")
     t_end = time.time() + hours * 3600
     last_scores = {}
@@ -62,7 +81,13 @@ def main():
                 quotes[m["ticker"]] = {"bid": q.get("yes_bid_dollars"), "ask": q.get("yes_ask_dollars"), "last": q.get("last_price_dollars")}
             except Exception as ex:  # noqa: BLE001
                 quotes[m["ticker"]] = {"error": str(ex)}
-        rec = {"ts": ts, "games": games, "quotes": quotes}
+        pq = {}
+        for tk, (q, tok) in poly.items():
+            try:
+                pq[tk] = get(f"https://clob.polymarket.com/midpoint?token_id={tok}").get("mid")
+            except Exception as ex:  # noqa: BLE001
+                pq[tk] = f"err {ex}"
+        rec = {"ts": ts, "games": games, "quotes": quotes, "polymarket": pq}
         out.write(json.dumps(rec) + "\n"); out.flush()
         # detect score changes
         for gid, g in games.items():
@@ -71,7 +96,7 @@ def main():
             sc = (g["home"][1], g["away"][1]) if g.get("home") and g.get("away") else None
             if sc and last_scores.get(gid) not in (None, sc):
                 changes.append((ts, g["name"], last_scores[gid], sc))
-                print(f"{datetime.fromtimestamp(ts, timezone.utc).strftime('%H:%M:%S')} SCORE {g['name']} {last_scores[gid]} -> {sc}  quotes: {quotes}")
+                print(f"{datetime.fromtimestamp(ts, timezone.utc).strftime('%H:%M:%S')} SCORE {g['name']} {last_scores[gid]} -> {sc}  kalshi: {quotes}  polymarket: {pq}")
             last_scores[gid] = sc
         for tk, q in quotes.items():
             try:
