@@ -61,6 +61,14 @@ async fn runs(State(a): State<Shared>) -> Json<Value> {
     Json(json!(runs))
 }
 
+async fn progress(State(_a): State<Shared>) -> Json<Value> {
+    let p = std::fs::read("data/dataset/progress.json")
+        .ok()
+        .and_then(|s| serde_json::from_slice::<Value>(&s).ok())
+        .unwrap_or(Value::Null);
+    Json(p)
+}
+
 async fn lab(State(a): State<Shared>) -> Json<Value> {
     let mut v = read_json_files(&a.lab_dir);
     v.sort_by_key(|r| r["name"].as_str().unwrap_or("").to_string());
@@ -206,6 +214,7 @@ pub async fn run(a: Args) -> Result<()> {
         .route("/api/runs", get(runs))
         .route("/api/reports", get(reports))
         .route("/api/lab", get(lab))
+        .route("/api/progress", get(progress))
         .route("/api/report", get(report))
         .route("/api/data", get(data))
         .route("/api/logs", get(logs))

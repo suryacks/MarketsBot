@@ -50,6 +50,7 @@
   <div class="card"><h2>Experiments <span class="muted small" id="labMeta">reading reports/lab…</span></h2>
     <div class="scroll tall"><table id="labT"><thead><tr><th>strategy</th><th>markets</th><th>what it does</th><th>stage</th><th>data</th><th>markets tested</th><th>fills</th><th>net PnL / $100</th><th>PnL per contract</th><th>win%</th><th>max DD</th><th>t</th><th>verdict</th></tr></thead><tbody></tbody></table></div></div>
   <div class="card"><h2>Strategy universe <span class="muted small" id="uniMeta">no universe.json yet — run mbot build-dataset, then mbot universe</span></h2>
+    <div id="collect" class="explain" style="margin-bottom:10px"></div>
     <div class="pipe" id="uniSummary"></div>
     <div class="explain" style="margin:10px 0 8px">Thousands of parametrized strategies (price buckets, YES/NO bias, momentum, reversal, breakouts, drift-since-open, time-of-day filters) evaluated on identical fee-inclusive terms across every liquid series. <b>IS</b> = selected on the older half of the markets, <b>OOS</b> = judged on the newer half. Only <b>PASS</b> (t ≥ 2 in both, positive out of sample) is evidence; with this many candidates a few will pass by luck — the summary shows how many to expect.</div>
     <div class="row small muted" style="margin-bottom:8px">family <select id="uniFam"><option value="">all</option></select> · verdict <select id="uniVerdict"><option value="">all</option><option>PASS</option><option>INCONCLUSIVE</option><option>FAIL OOS</option><option>NOISE</option></select> · scope contains <input id="uniScope" placeholder="e.g. KXHIGH or CAT:Sports" style="width:180px"> · min OOS n <input id="uniMinN" type="number" value="30" style="width:60px"></div>
@@ -191,6 +192,12 @@ async function loadLab(){
   renderRules(); renderPipe();
 }
 let uni=null;
+async function loadProgress(){
+  try { const p=await j('/api/progress'); const el=$('#collect'); if(!p||!p.phase){ el.textContent=''; return; }
+    const live=(Date.now()-p.updated_ms)<180000; const pct=p.target_series?Math.min(100,100*p.series_written/p.target_series):0;
+    el.innerHTML=`<b>Data collection ${p.phase==='complete'?'complete':(live?'running':'stalled')}</b> — ${p.series_written} series with full price paths on disk${p.target_series?` of ${p.target_series} targeted`:''}, ${p.markets_fetched} markets fetched, ${p.series_scanned}/${p.series_candidates} candidate series scanned${p.last_series?` · latest: ${p.last_series} (${p.last_title||''})`:''} · ${p.authenticated?'authenticated (fast tier)':'public tier'} · updated ${ago(p.updated_ms)}<div class="bar" style="margin-top:6px"><i style="width:${pct}%"></i></div><span class="muted small">The universe below is re-evaluated every few minutes on whatever has arrived, so its numbers climb as data lands.</span>`;
+  } catch(e){}
+}
 async function loadUniverse(){
   try { const r=await fetch('/api/report?name=universe.json'); uni=await r.json(); } catch(e){ uni=null; }
   if(!uni||!uni.rows){ return; }
@@ -240,8 +247,8 @@ async function loadData(){ const d=await j('/api/data'); $('#data').innerHTML=d.
 async function loadLogs(){ const files=await j('/api/logs'); const sel=$('#logSel'); const prev=sel.value; sel.innerHTML=files.map(f=>`<option value="${f.file}">${f.file} (${(f.bytes/1024).toFixed(0)} KB)</option>`).join(''); if(files.find(f=>f.file===prev)) sel.value=prev; if(sel.value){ const t=await j('/api/logs?file='+encodeURIComponent(sel.value)+'&lines=200'); $('#log').textContent=(t.lines||[]).join('\n'); const pre=$('#log'); pre.scrollTop=pre.scrollHeight; } }
 $('#logSel').onchange=loadLogs;
 setInterval(()=>{ $('#clock').textContent=new Date().toLocaleString(); },1000);
-loadRuns(); loadReports(); loadData(); loadLogs(); loadLab(); loadUniverse();
-setInterval(loadRuns,2000); setInterval(loadLogs,5000); setInterval(loadData,30000); setInterval(loadReports,60000); setInterval(loadLab,5000); setInterval(loadUniverse,60000);
+loadRuns(); loadReports(); loadData(); loadLogs(); loadLab(); loadUniverse(); loadProgress();
+setInterval(loadRuns,2000); setInterval(loadLogs,5000); setInterval(loadData,30000); setInterval(loadReports,60000); setInterval(loadLab,5000); setInterval(loadUniverse,60000); setInterval(loadProgress,10000);
 </script>
 </body>
 </html>

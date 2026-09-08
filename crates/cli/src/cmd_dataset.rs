@@ -1,6 +1,11 @@
 //! Build the wide historical dataset: every liquid series across every category,
-//! all settled markets in the window, full candlestick price paths. Public
-//! endpoints only, paced. Resumable: series already on disk are skipped.
+//! all settled markets in the window, full candlestick price paths.
+//!
+//! Streams: each series is qualified, fetched and written before the next, so
+//! data is usable from the first minute and `mbot universe` can re-run on a
+//! growing dataset. Uses the authenticated client when keys are configured
+//! (higher rate tier). Resumable: series already on disk are skipped.
+//! Progress is published to `<out>/progress.json` for the dashboard.
 //!
 //! Layout: data/dataset/markets/<series>.parquet (DsMarket rows)
 //!         data/dataset/prices/<series>.parquet  (DsPrice rows)
@@ -27,26 +32,38 @@ pub struct Args {
     pub min_volume: f64,
     #[arg(long, default_value_t = 20)]
     pub min_markets: usize,
-    #[arg(long, default_value_t = 200)]
+    /// Stop after this many series have price paths on disk
+    #[arg(long, default_value_t = 250)]
     pub max_series: usize,
     #[arg(long, default_value_t = 120)]
     pub max_markets_per_series: usize,
     #[arg(long, default_value = "data/dataset")]
     pub out: PathBuf,
-    /// ms between requests
-    #[arg(long, default_value_t = 380)]
-    pub pace_ms: u64,
+    /// ms between requests (default: 150 with API keys, 380 without)
+    #[arg(long)]
+    pub pace_ms: Option<u64>,
+}
+
+fn write_progress(out: &PathBuf, v: serde_json::Value) {
+    let p = out.join("progress.json");
+    let tmp = out.join("progress.json.tmp");
+    if std::fs::write(&tmp, serde_json::to_vec(&v).unwrap_or_default()).is_ok() {
+        let _ = std::fs::rename(tmp, p);
+    }
 }
 
 pub async fn run(a: Args) -> Result<()> {
-    let client = KalshiClient::public_prod()?;
-    let pace = Duration::from_millis(a.pace_ms);
+    let client = KalshiClient::from_env().or_else(|_| KalshiClient::public_prod())?;
+    let authed = client.is_authenticated();
+    let pace = Duration::from_millis(a.pace_ms.unwrap_or(if authed { 150 } else { 380 }));
+    info!(authenticated = authed, pace_ms = pace.as_millis() as u64, "dataset collector");
     let now = chrono::Utc::now().timestamp();
     let since = now - a.days * 86_400;
     std::fs::create_dir_all(a.out.join("markets"))?;
     std::fs::create_dir_all(a.out.join("prices"))?;
+    let started = chrono::Utc::now().timestamp_millis();
 
-    // 1. series
+    // 1. series (all categories), largest categories first
     let mut series = Vec::new();
     for cat in &a.categories {
         match client.list_series(Some(cat)).await {
@@ -55,47 +72,53 @@ pub async fn run(a: Args) -> Result<()> {
         }
         tokio::time::sleep(pace).await;
     }
-    info!(candidates = series.len(), "series discovered");
+    let on_disk = std::fs::read_dir(a.out.join("prices")).map(|rd| rd.count()).unwrap_or(0);
+    info!(candidates = series.len(), on_disk, "series discovered");
 
-    // 2. settled markets per series (skip series already on disk)
-    let mut chosen: Vec<((String, String, String, String), Vec<mb_kalshi::types::Market>)> = Vec::new();
-    for (i, s) in series.iter().enumerate() {
-        if a.out.join("prices").join(format!("{}.parquet", s.0)).exists() {
+    // 2. stream: qualify → fetch paths → write, one series at a time
+    let mut written = on_disk;
+    let mut markets_fetched = 0usize;
+    let mut scanned = 0usize;
+    let mut qualifying = 0usize;
+    for (ticker, category, title, frequency) in &series {
+        if written >= a.max_series {
+            break;
+        }
+        scanned += 1;
+        if a.out.join("prices").join(format!("{ticker}.parquet")).exists() {
             continue;
         }
         let q = MarketsQuery {
-            series_ticker: Some(s.0.clone()),
+            series_ticker: Some(ticker.clone()),
             status: Some("settled".into()),
             min_close_ts: Some(since),
             limit: Some(1000),
             ..Default::default()
         };
-        match client.get_markets(&q, None).await {
-            Ok(r) => {
-                let ms: Vec<_> = r
-                    .markets
-                    .into_iter()
-                    .filter(|m| matches!(m.result.as_str(), "yes" | "no") && m.volume_fp.map(|v| v.to_f64()).unwrap_or(0.0) >= a.min_volume)
-                    .collect();
-                if ms.len() >= a.min_markets {
-                    chosen.push((s.clone(), ms));
-                }
+        let ms = match client.get_markets(&q, None).await {
+            Ok(r) => r
+                .markets
+                .into_iter()
+                .filter(|m| matches!(m.result.as_str(), "yes" | "no") && m.volume_fp.map(|v| v.to_f64()).unwrap_or(0.0) >= a.min_volume)
+                .collect::<Vec<_>>(),
+            Err(e) => {
+                warn!(series = %ticker, error = %e, "markets failed");
+                Vec::new()
             }
-            Err(e) => warn!(series = %s.0, error = %e, "markets failed"),
-        }
-        if i % 100 == 0 {
-            info!(scanned = i + 1, of = series.len(), qualifying = chosen.len(), "series pass");
-        }
+        };
         tokio::time::sleep(pace).await;
-    }
-    chosen.sort_by_key(|(_, ms)| std::cmp::Reverse(ms.len()));
-    chosen.truncate(a.max_series);
-    let total: usize = chosen.iter().map(|(_, ms)| ms.len().min(a.max_markets_per_series)).sum();
-    info!(series = chosen.len(), markets = total, eta_h = total as f64 * a.pace_ms as f64 / 3.6e6, "fetching price paths");
-
-    // 3. candles per market, written per series
-    let mut done = 0usize;
-    for ((ticker, category, title, frequency), ms) in &chosen {
+        if scanned % 25 == 0 {
+            write_progress(
+                &a.out,
+                serde_json::json!({"phase": "collecting", "started_ms": started, "updated_ms": chrono::Utc::now().timestamp_millis(),
+                                   "series_scanned": scanned, "series_candidates": series.len(), "series_qualifying": qualifying,
+                                   "series_written": written, "markets_fetched": markets_fetched, "target_series": a.max_series, "authenticated": authed}),
+            );
+        }
+        if ms.len() < a.min_markets {
+            continue;
+        }
+        qualifying += 1;
         let mut mrows: Vec<DsMarket> = Vec::new();
         let mut prows: Vec<DsPrice> = Vec::new();
         for m in ms.iter().take(a.max_markets_per_series) {
@@ -112,10 +135,7 @@ pub async fn run(a: Args) -> Result<()> {
                 }
             };
             tokio::time::sleep(pace).await;
-            done += 1;
-            if done % 200 == 0 {
-                info!(done, of = total, "progress");
-            }
+            markets_fetched += 1;
             mrows.push(DsMarket {
                 ticker: m.ticker.clone(),
                 series: ticker.clone(),
@@ -147,9 +167,22 @@ pub async fn run(a: Args) -> Result<()> {
         if !mrows.is_empty() {
             write_parquet(a.out.join("markets").join(format!("{ticker}.parquet")), &mrows)?;
             write_parquet(a.out.join("prices").join(format!("{ticker}.parquet")), &prows)?;
-            info!(series = ticker, title = %title, markets = mrows.len(), candles = prows.len(), "written");
+            written += 1;
+            info!(series = ticker, title = %title, markets = mrows.len(), candles = prows.len(), written, "written");
+            write_progress(
+                &a.out,
+                serde_json::json!({"phase": "collecting", "started_ms": started, "updated_ms": chrono::Utc::now().timestamp_millis(),
+                                   "series_scanned": scanned, "series_candidates": series.len(), "series_qualifying": qualifying,
+                                   "series_written": written, "markets_fetched": markets_fetched, "target_series": a.max_series, "authenticated": authed,
+                                   "last_series": ticker, "last_title": title}),
+            );
         }
     }
-    info!("dataset complete");
+    write_progress(
+        &a.out,
+        serde_json::json!({"phase": "complete", "started_ms": started, "updated_ms": chrono::Utc::now().timestamp_millis(),
+                           "series_scanned": scanned, "series_candidates": series.len(), "series_written": written, "markets_fetched": markets_fetched}),
+    );
+    info!(written, markets_fetched, "dataset complete");
     Ok(())
 }
