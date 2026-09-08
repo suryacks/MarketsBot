@@ -90,6 +90,9 @@ pub struct PaperArgs {
     /// Override config: reference symbol (e.g. BRTI with --index-feed, BTC-USD with Coinbase)
     #[arg(long)]
     pub ref_symbol: Option<String>,
+    /// Override config: minimum seconds to expiry for normal-window trades (huge = endgame only)
+    #[arg(long)]
+    pub min_tau_secs: Option<i64>,
     /// btc15m | spread-maker | rules
     #[arg(long, default_value = "btc15m")]
     pub strategy: String,
@@ -660,6 +663,9 @@ pub fn build_strategy(a: &PaperArgs) -> Result<(Box<dyn mb_core::Strategy>, Stri
             }
             if let Some(r) = &a.ref_symbol {
                 cfg.ref_symbol = r.clone();
+            }
+            if let Some(t) = a.min_tau_secs {
+                cfg.min_tau_secs = t;
             }
             cfg.scale_to_bankroll(a.bankroll);
             let series = cfg.series.clone();
