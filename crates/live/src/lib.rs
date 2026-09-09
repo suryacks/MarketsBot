@@ -23,6 +23,14 @@ pub struct LiveConfig {
     pub max_order_qty: f64,
     pub max_open_orders: usize,
     pub max_loss: f64,
+    /// Stop trading a single market once it has lost this much (0 = no limit).
+    ///
+    /// A position cap is not a loss cap. It bounds what we hold at one moment and says
+    /// nothing about round trips: one 15-minute market took 129 fills, buying and selling
+    /// the same few contracts over and over, and lost far more than the $6 it was ever
+    /// allowed to hold. This counts realized and unrealized P&L for the market together,
+    /// so churn is caught the way a single bad position would be.
+    pub max_loss_per_market: f64,
     /// Log orders instead of sending them.
     pub dry_run: bool,
     /// Series this run is responsible for. Several bots share one Kalshi account, so
@@ -39,6 +47,7 @@ impl Default for LiveConfig {
             max_order_qty: 5.0,
             max_open_orders: 20,
             max_loss: 50.0,
+            max_loss_per_market: 0.0,
             dry_run: false,
             series: Vec::new(),
         }
@@ -231,6 +240,14 @@ impl KalshiExecutor {
     fn fee_for(&self, ticker: &str) -> FeeModel {
         let series = ticker.split('-').next().unwrap_or("");
         self.fee_models.get(series).cloned().unwrap_or_else(FeeModel::kalshi_default)
+    }
+
+    /// Has this market already lost more than it is allowed to?
+    fn market_exhausted(&self, ticker: &str) -> bool {
+        if self.cfg.max_loss_per_market <= 0.0 {
+            return false;
+        }
+        self.positions.get(ticker).is_some_and(|p| self.marked(p).1 <= -self.cfg.max_loss_per_market)
     }
 
     /// Is this market one this run is responsible for?
@@ -500,6 +517,7 @@ impl Context for KalshiExecutor {
             || self.orders.len() >= self.cfg.max_open_orders
             || self.notional_at_risk() + cost > self.cfg.max_notional
             || cost > self.cash.to_f64()
+            || self.market_exhausted(&req.ticker)
         {
             warn!(ticker = %req.ticker, qty = %req.qty, px = %req.yes_px, at_risk = self.notional_at_risk(), "order REJECTED by risk limits");
             self.rejected += 1;

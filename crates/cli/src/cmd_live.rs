@@ -595,6 +595,11 @@ pub struct LiveArgs {
     /// Kill switch: halt and cancel everything once equity drops this much below start
     #[arg(long, default_value_t = 50.0)]
     pub max_loss: f64,
+    /// Stop trading any single market once it has lost this much (0 = no limit). Catches
+    /// churn a position cap cannot: one market took 129 fills round-tripping the same few
+    /// contracts and lost several times what it was ever allowed to hold.
+    #[arg(long, default_value_t = 0.0)]
+    pub max_loss_per_market: f64,
     /// Log orders instead of sending them
     #[arg(long)]
     pub dry_run: bool,
@@ -632,6 +637,7 @@ pub async fn live(a: LiveArgs) -> Result<()> {
         max_order_qty: a.max_order_qty,
         max_open_orders: a.max_open_orders,
         max_loss: a.max_loss,
+        max_loss_per_market: a.max_loss_per_market,
         dry_run: a.dry_run,
         series: a.paper.feed.series.clone(),
     };
