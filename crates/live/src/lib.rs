@@ -70,6 +70,10 @@ pub struct KalshiExecutor {
     books: HashMap<String, Orderbook>,
     /// Kalshi's own valuation of open positions, in dollars (from the balance call).
     portfolio_value: f64,
+    /// Realized P&L from markets that settled while this run was up. Together with the
+    /// unrealized marks this gives a P&L derived from our own trades, which no deposit,
+    /// withdrawal or shard transfer can move.
+    session_realized: f64,
     positions: HashMap<String, Position>,
     cash: Fp,
     initial_cash: Fp,
@@ -130,6 +134,7 @@ impl KalshiExecutor {
             now_ms: chrono::Utc::now().timestamp_millis(),
             books: HashMap::new(),
             portfolio_value: 0.0,
+            session_realized: 0.0,
             positions: HashMap::new(),
             cash: Fp::ZERO,
             initial_cash: Fp::ZERO,
@@ -298,12 +303,27 @@ impl KalshiExecutor {
         self.positions.values().map(|p| self.marked(p).2).sum()
     }
 
+    /// Loss so far, taken as the worse of two independent measures.
+    ///
+    /// `traded` counts only our own settlements and marks; `account` is the change in
+    /// account value since the baseline. Each is blind to a different failure, and taking
+    /// the worse of them means neither blindness can hide a loss: a deposit inflates
+    /// `account` but not `traded`, and a settlement we never saw inflates `traded` but not
+    /// `account`. An earlier version trusted `account` alone and tried to correct it by
+    /// guessing which cash movements were deposits -- it guessed wrong, walked the baseline
+    /// down as the losses came in, and let a $15 limit run to $21.
+    pub fn worst_case_pnl(&self) -> f64 {
+        let traded = self.session_realized + self.unrealized();
+        let account = self.cash.to_f64() + self.positions_value() - self.initial_cash.to_f64();
+        traded.min(account)
+    }
+
     fn check_kill_switch(&mut self) {
         if self.halted {
             return;
         }
         let equity = self.cash.to_f64() + self.positions_value();
-        if equity - self.initial_cash.to_f64() <= -self.cfg.max_loss {
+        if self.worst_case_pnl() <= -self.cfg.max_loss {
             error!(equity, initial = %self.initial_cash, "KILL SWITCH: max loss reached — halting and cancelling all orders");
             self.halted = true;
             let ids: Vec<OrderId> = self.orders.keys().copied().collect();
@@ -388,6 +408,7 @@ impl KalshiExecutor {
                     let q = p.yes_qty;
                     let payout = if *result == mb_core::Outcome::Yes { q.max(Fp::from_int(0)) } else { (-q).max(Fp::from_int(0)) };
                     self.cash += payout;
+                    self.session_realized += (p.cash + payout).to_f64();
                     info!(ticker, ?result, pnl = %(p.cash + payout), "settled");
                 }
                 let ids: Vec<OrderId> = self.orders.iter().filter(|(_, o)| &o.req.ticker == ticker).map(|(id, _)| *id).collect();
@@ -425,7 +446,13 @@ impl KalshiExecutor {
         json!({
             "run_id": run_id, "mode": "LIVE", "strategy": strategy_name, "started_ms": started_ms, "updated_ms": self.now_ms,
             "initial_cash": self.initial_cash.to_f64(), "cash": self.cash.to_f64(), "free_cash": (self.cfg.max_notional - self.notional_at_risk()).max(0.0),
-            "settled_pnl": self.cash.to_f64() - self.initial_cash.to_f64(), "unrealized": unreal, "equity": self.cash.to_f64() + pos_value,
+            // `settled_pnl` is what our own trades did; the account-vs-baseline view is
+            // reported alongside it so a divergence (a deposit, a missed settlement) is
+            // visible rather than silently folded into one number.
+            "settled_pnl": self.session_realized, "unrealized": unreal, "equity": self.cash.to_f64() + pos_value,
+            "pnl_traded": self.session_realized + unreal,
+            "pnl_account": self.cash.to_f64() + pos_value - self.initial_cash.to_f64(),
+            "pnl_worst": self.worst_case_pnl(),
             "n_fills": self.fills.len(), "settled_count": 0, "settled_wins": 0, "settled": [], "markets_seen": self.books.len(),
             "positions": positions,
             "open_orders": self.orders.iter().map(|(id, o)| json!({"id": id.0, "ticker": o.req.ticker, "action": format!("{:?}", o.req.action), "yes_px": o.req.yes_px.to_f64(), "qty": o.req.qty.to_f64(), "remaining": o.remaining.to_f64(), "ahead": 0, "tag": o.req.tag, "kalshi_id": o.kalshi_id})).collect::<Vec<_>>(),
