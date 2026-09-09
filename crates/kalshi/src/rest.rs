@@ -282,9 +282,26 @@ impl KalshiClient {
         self.get("/portfolio/positions", &[("limit", "1000".into())]).await
     }
 
+    /// Place an order, routed to the shard that actually lists the market.
+    ///
+    /// Kalshi splits its matching engine across exchange shards and holds collateral
+    /// SEPARATELY on each. An order sent without `exchange_index` defaults to shard 0,
+    /// so every crypto order (shard 2) came back `404 user_not_found` -- not a broken
+    /// key, just money sitting on the wrong exchange. `-1` asks Kalshi to route by
+    /// ticker, which costs a little latency but is always correct.
     pub async fn create_order(&self, req: &CreateOrderRequest) -> Result<CreateOrderResponse> {
         self.require_auth()?;
-        self.request(Method::POST, "/portfolio/events/orders", &[], Some(req)).await
+        self.request(Method::POST, "/portfolio/events/orders", &[("exchange_index", "-1".into())], Some(req)).await
+    }
+
+    /// Move collateral between exchange shards. `amount` is in centicents.
+    pub async fn intra_exchange_transfer(&self, amount_centicents: i64, from_shard: i64, to_shard: i64) -> Result<serde_json::Value> {
+        self.require_auth()?;
+        let body = serde_json::json!({
+            "source": "event_contract", "destination": "event_contract", "amount": amount_centicents,
+            "source_exchange_shard": from_shard, "destination_exchange_shard": to_shard,
+        });
+        self.request(Method::POST, "/portfolio/intra_exchange_instance_transfer", &[], Some(&body)).await
     }
 
     pub async fn cancel_order(&self, order_id: &str) -> Result<serde_json::Value> {
