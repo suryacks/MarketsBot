@@ -79,6 +79,12 @@ pub struct KalshiExecutor {
     books: HashMap<String, Orderbook>,
     /// Kalshi's own valuation of open positions, in dollars (from the balance call).
     portfolio_value: f64,
+    /// Contracts submitted per market since the last account sync, counted as though every
+    /// one of them filled. On a shard whose fill stream is silent we do not learn our real
+    /// position until the next poll, and a maker requoting every second can fill many times
+    /// inside that window: a 10-contract cap was carried to 19 this way, and to 66 the night
+    /// before. Assuming the worst about orders in flight is the only safe accounting.
+    sent_since_sync: HashMap<String, Fp>,
     /// Realized P&L from markets that settled while this run was up. Together with the
     /// unrealized marks this gives a P&L derived from our own trades, which no deposit,
     /// withdrawal or shard transfer can move.
@@ -144,6 +150,7 @@ impl KalshiExecutor {
             books: HashMap::new(),
             portfolio_value: 0.0,
             session_realized: 0.0,
+            sent_since_sync: HashMap::new(),
             positions: HashMap::new(),
             cash: Fp::ZERO,
             initial_cash: Fp::ZERO,
@@ -233,6 +240,8 @@ impl KalshiExecutor {
                 }
             }
         }
+        // Positions are authoritative again, so nothing is unaccounted for.
+        self.sent_since_sync.clear();
         info!(cash = %self.cash, positions = self.positions.len(), "account synced");
         Ok(())
     }
@@ -259,6 +268,7 @@ impl KalshiExecutor {
     /// Counts only this run's own series -- see `LiveConfig::series`.
     pub fn notional_at_risk(&self) -> f64 {
         let pos: f64 = self.positions.values().filter(|p| self.owns(&p.ticker)).map(|p| p.yes_qty.abs().to_f64()).sum();
+        let in_flight: f64 = self.sent_since_sync.iter().filter(|(t, _)| self.owns(t)).map(|(_, q)| q.abs().to_f64()).sum();
         let orders: f64 = self
             .orders
             .values()
@@ -268,7 +278,7 @@ impl KalshiExecutor {
                 Action::Sell => o.remaining.to_f64() * (1.0 - o.req.yes_px.to_f64()),
             })
             .sum();
-        pos + orders
+        pos + orders + in_flight
     }
 
     /// `(mark, unrealized_pnl, liquidation_value)` for one live position.
@@ -523,6 +533,8 @@ impl Context for KalshiExecutor {
             self.rejected += 1;
             return id;
         }
+        // Treat it as filled until the next sync proves otherwise.
+        *self.sent_since_sync.entry(req.ticker.clone()).or_insert(Fp::ZERO) += req.qty;
         self.orders.insert(
             id,
             LiveOrder {
