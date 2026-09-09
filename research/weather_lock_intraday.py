@@ -84,6 +84,22 @@ def books_for(prefix):
     return out
 
 
+_META = {}
+
+
+def kmeta(ticker):
+    """Market metadata (strike_type, floor/cap) straight from Kalshi, cached."""
+    if ticker not in _META:
+        try:
+            import sys
+            sys.path.insert(0, "research")
+            from kalshi_auth import get as kget
+            _META[ticker] = (kget(f"/markets/{ticker}") or {}).get("market", {}) or {}
+        except Exception:  # noqa: BLE001
+            _META[ticker] = {}
+    return _META[ticker]
+
+
 def main():
     day = datetime.strptime(sys.argv[1], "%Y-%m-%d").replace(tzinfo=timezone.utc) if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else datetime.now(timezone.utc) - timedelta(days=0)
     tag = day.strftime("%y%b%d").upper()  # 26SEP08
@@ -111,13 +127,36 @@ def main():
         print(f"  {series}: {len(books)} markets with books, {len(run)} obs minutes, day max so far {mx:.0f}F")
         for tk, path in books.items():
             t_ = tk.rsplit("-", 1)[-1]
-            if t_.startswith("B"):
-                c = float(t_[1:]); lo, hi = math.floor(c), math.ceil(c); kind = "between"
-            elif t_.startswith("T"):
-                lo = int(math.floor(float(t_[1:]))) + 1; hi = 999; kind = "greater"  # T80 == "greater than 80" => >= 81 for whole degrees
+            # Read the strike from the market, never from the ticker's shape. A "T86" ticker
+            # is "greater than 86" in some series and "LESS than 86" in others; assuming
+            # greater turned five correctly-priced worthless contracts into a phantom +98c
+            # edge, because the edge was computed on the wrong side of the trade.
+            meta = kmeta(tk)
+            stype = (meta.get("strike_type") or "").lower()
+            if t_.startswith("B") or stype == "between":
+                c = float(t_[1:]) if t_.startswith("B") else None
+                lo = float(meta.get("floor_strike") or math.floor(c))
+                hi = float(meta.get("cap_strike") or math.ceil(c))
+                kind = "between"
+            elif stype in ("greater", "greater_or_equal"):
+                k = float(meta["floor_strike"])
+                lo = math.floor(k) + 1 if stype == "greater" else math.ceil(k)
+                hi = 999.0
+                kind = "greater"
+            elif stype in ("less", "less_or_equal"):
+                k = float(meta["cap_strike"])
+                lo = -999.0
+                hi = math.ceil(k) - 1 if stype == "less" else math.floor(k)
+                kind = "less"
             else:
                 continue
-            cross = next((t for t, m in run if (m >= lo if kind == "greater" else m > hi)), None)
+            # A high-temperature market is decided YES only when it has no ceiling, and
+            # decided NO as soon as the running max clears its ceiling. Rounded, because
+            # settlement is in whole degrees.
+            if kind == "greater":
+                cross = next((t for t, m in run if round(m) >= lo), None)
+            else:
+                cross = next((t for t, m in run if round(m) > hi), None)
             if cross is None:
                 continue
             cross_ms = int(cross.timestamp() * 1000)
@@ -126,6 +165,7 @@ def main():
                 continue
             # time until the book agrees the outcome is locked
             def locked(bb, ba):
+                # "greater" locks YES (buy, want a cheap ask); the others lock NO (sell, want a bid).
                 return (ba is not None and ba >= 0.97) if kind == "greater" else (bb is not None and bb <= 0.03)
             first_locked = next((ts for ts, bb, ba in after if locked(bb, ba)), None)
             lag_min = (first_locked - cross_ms) / 60000 if first_locked else None
@@ -138,7 +178,7 @@ def main():
                 return (max(bids) - fee(max(bids))) if bids else None
             e5, e15, e60 = best_edge(5), best_edge(15), best_edge(60)
             pre = [x for x in path if x[0] < cross_ms][-1:]
-            results.append((tk, kind, cross.strftime("%H:%M"), lag_min, e5, e15, e60, pre[0][2] if pre and kind == "greater" else (pre[0][1] if pre else None)))
+            results.append((tk, kind, cross.strftime("%H:%M"), lag_min, e5, e15, e60, (pre[0][2] if kind == "greater" else pre[0][1]) if pre else None))
     print(f"\n{'ticker':<30} {'kind':<8} {'crossed':>7} {'lag→locked':>10} {'edge≤5m':>8} {'edge≤15m':>9} {'edge≤60m':>9} {'px before':>9}")
     for r in sorted(results, key=lambda r: -(r[4] or -1)):
         print(f"{r[0]:<30} {r[1]:<8} {r[2]:>7} {('%.0f min' % r[3]) if r[3] is not None else 'never':>10} {('%+.3f' % r[4]) if r[4] is not None else '–':>8} {('%+.3f' % r[5]) if r[5] is not None else '–':>9} {('%+.3f' % r[6]) if r[6] is not None else '–':>9} {('%.2f' % r[7]) if r[7] is not None else '–':>9}")
