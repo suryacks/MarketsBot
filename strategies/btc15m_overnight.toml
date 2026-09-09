@@ -1,0 +1,70 @@
+# Short-dated crypto binary fair-value strategy (Kalshi KXBTC15M and friends).
+# See crates/strategy/src/config.rs for every field and its default.
+
+series = "KXBTC15M"
+ref_symbol = "BTC-USD"
+
+# Edge required after fees before taking, in probability points (0.03 = 3¢ per contract).
+min_edge = 0.03
+# Fraction of full Kelly. 0.25 is conservative; full Kelly on a mis-specified model is how you blow up.
+kelly_fraction = 0.25
+
+max_contracts_per_market = 10.0
+max_notional_per_market = 6.0
+max_order_qty = 4.0
+# Kalshi rounds each order's fee up to the cent, so 1-lots pay ~4x the nominal rate — but the
+# A/B on 2026-09-05..07 showed small fills are still +EV at >= 3c edge (5 was strictly worse).
+min_order_qty = 1.0
+
+# Settlement is the mean of the last 60 s of the index; don't trade into it.
+no_trade_last_secs = 75
+warmup_secs = 5
+settle_avg_secs = 60.0
+
+# Realized-vol estimator (EWMA of per-second variance) and sanity clamps (annualized).
+vol_lambda = 0.97
+vol_sample_secs = 60.0
+# realized | implied | max | mean. "implied" backs sigma out of the market's own prints, so the
+# model borrows the crowd's tail estimate and keeps only our spot-timing + basis information.
+vol_source = "realized"
+iv_lambda = 0.98
+
+# Risk: no averaging down, and never more than this fraction of cash in one 15-minute market.
+max_entries_per_market = 3
+notional_frac_of_cash = 0.05
+vol_floor_annual = 0.08
+vol_cap_annual = 2.0
+
+requote_ms = 1000
+min_touch_qty = 1.0
+allow_unwind = false
+
+# The model beats the market only with >= 5 min to expiry; inside that the market has the live index.
+min_tau_secs = 300
+
+# Coinbase last-trade vs BRTI basis, learned from each market's strike (strike == 60s index avg before open).
+auto_basis = true
+ref_basis = 0.0
+basis_lambda = 0.9
+
+# Tail control. 10-day calibration (2026-08-28..09-07) showed the raw model is overconfident at the
+# extremes (model 0.97 -> realized 0.90); shrink toward the market and stay out of the tails.
+market_blend = 0.5
+fair_min = 0.0
+fair_max = 1.0
+
+# Maker mode: rest post-only quotes at fair -/+ min_edge. KXBTC15M charges makers no fee.
+maker = true
+maker_qty = 10.0
+
+# ---------------------------------------------------------------------------
+# OVERNIGHT RUN, funded at the account owner's explicit direction after being shown
+# the evidence: 30 settled markets at +$19.30 but t = 0.73, all of it in 3 markets,
+# and the first live fills lost $1.74 to adverse selection. This is not a validated
+# edge and is not sized as though it were one.
+#
+# Each 15-minute market risks at most $6 and 5% of shard cash, so no single market
+# can take a meaningful bite, and the run-level kill switch stops the night at $15.
+# ETH/SOL/XRP are deliberately NOT live: they run in paper alongside, because that
+# discipline is what caught the favourite-maker before it cost real money.
+# ---------------------------------------------------------------------------

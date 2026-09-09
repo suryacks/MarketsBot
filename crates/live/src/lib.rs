@@ -25,6 +25,11 @@ pub struct LiveConfig {
     pub max_loss: f64,
     /// Log orders instead of sending them.
     pub dry_run: bool,
+    /// Series this run is responsible for. Several bots share one Kalshi account, so
+    /// without this a bot counts another bot's positions against its own notional cap:
+    /// the crypto run was refused 64 orders because the weather run held two contracts.
+    /// Empty means "everything", which is right for a single-bot account.
+    pub series: Vec<String>,
 }
 
 impl Default for LiveConfig {
@@ -35,6 +40,7 @@ impl Default for LiveConfig {
             max_open_orders: 20,
             max_loss: 50.0,
             dry_run: false,
+            series: Vec::new(),
         }
     }
 }
@@ -167,6 +173,18 @@ impl KalshiExecutor {
             })
             .or_else(|| bal["balance"].as_i64().map(|c| Fp::from_f64(c as f64 / 100.0)))
             .unwrap_or(Fp::ZERO);
+        // A deposit or withdrawal is not profit or loss. Cash we did not trade our way to
+        // must move the baseline with it, or a $60 top-up reads as a $60 gain -- and the
+        // kill switch, which measures equity against that baseline, stops being able to
+        // fire at all. Only large discrete jumps qualify: trading at these sizes never
+        // moves cash by $5 between syncs, so this cannot quietly absorb a real loss.
+        if self.initial_cash > Fp::ZERO {
+            let drift = dollars.to_f64() - self.cash.to_f64();
+            if drift.abs() >= 5.0 {
+                self.initial_cash = self.initial_cash + Fp::from_f64(drift);
+                warn!(drift, new_baseline = %self.initial_cash, "external cash flow: baseline moved, not counted as P&L");
+            }
+        }
         self.cash = dollars;
         self.portfolio_value = bal["portfolio_value"].as_f64().map(|c| c / 100.0).unwrap_or(0.0);
         let pos = self.client.get_positions().await?;
@@ -205,12 +223,19 @@ impl KalshiExecutor {
         self.fee_models.get(series).cloned().unwrap_or_else(FeeModel::kalshi_default)
     }
 
+    /// Is this market one this run is responsible for?
+    fn owns(&self, ticker: &str) -> bool {
+        self.cfg.series.is_empty() || self.cfg.series.iter().any(|s| ticker.starts_with(s.as_str()))
+    }
+
     /// Worst-case dollars at risk: open positions (|q| × $1) + resting orders (cost if filled).
+    /// Counts only this run's own series -- see `LiveConfig::series`.
     pub fn notional_at_risk(&self) -> f64 {
-        let pos: f64 = self.positions.values().map(|p| p.yes_qty.abs().to_f64()).sum();
+        let pos: f64 = self.positions.values().filter(|p| self.owns(&p.ticker)).map(|p| p.yes_qty.abs().to_f64()).sum();
         let orders: f64 = self
             .orders
             .values()
+            .filter(|o| self.owns(&o.req.ticker))
             .map(|o| match o.req.action {
                 Action::Buy => o.remaining.to_f64() * o.req.yes_px.to_f64(),
                 Action::Sell => o.remaining.to_f64() * (1.0 - o.req.yes_px.to_f64()),

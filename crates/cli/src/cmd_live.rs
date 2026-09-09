@@ -598,6 +598,11 @@ pub struct LiveArgs {
     /// Log orders instead of sending them
     #[arg(long)]
     pub dry_run: bool,
+    /// Seconds between account resyncs. Also the worst-case delay before a fill is seen on
+    /// a shard whose fill stream is silent, so keep it well under the time it takes to
+    /// accumulate the inventory cap.
+    #[arg(long, default_value_t = 5)]
+    pub sync_secs: u64,
     /// Required to send real orders against the production exchange
     #[arg(long)]
     pub i_understand_this_uses_real_money: bool,
@@ -628,6 +633,7 @@ pub async fn live(a: LiveArgs) -> Result<()> {
         max_open_orders: a.max_open_orders,
         max_loss: a.max_loss,
         dry_run: a.dry_run,
+        series: a.paper.feed.series.clone(),
     };
     let mut ex = mb_live::KalshiExecutor::new(client, cfg).await?;
     for (s, fm) in &feeds.fee_models {
@@ -638,7 +644,11 @@ pub async fn live(a: LiveArgs) -> Result<()> {
           max_notional = a.max_notional, max_loss = a.max_loss, "LIVE TRADING — Ctrl-C to stop (resting orders are cancelled on exit)");
 
     let mut state_tick = tokio::time::interval(Duration::from_secs(1));
-    let mut sync_tick = tokio::time::interval(Duration::from_secs(60));
+    // Resync fast. The `fill` websocket channel is shard-scoped and delivers nothing for
+    // shards other than 0, so on those the account poll is the ONLY way a bot learns it has
+    // been filled -- and until it does, its inventory cap is not enforcing anything. Sixty
+    // seconds of that was enough to quote past a 2-contract limit; five is not.
+    let mut sync_tick = tokio::time::interval(Duration::from_secs(a.sync_secs.max(1)));
     sync_tick.tick().await;
     loop {
         tokio::select! {
