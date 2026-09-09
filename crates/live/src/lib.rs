@@ -153,11 +153,18 @@ impl KalshiExecutor {
     /// Pull balance + positions from the exchange (start-up and periodic resync).
     pub async fn sync_account(&mut self) -> Result<()> {
         let bal = self.client.get_balance().await?;
-        // `balance` is integer cents; `balance_breakdown[0].balance` is dollars with 4 dp
-        let dollars = bal["balance_breakdown"]
-            .get(0)
-            .and_then(|b| b["balance"].as_str())
+        // Cash is the balance across ALL exchange shards, not `balance_breakdown[0]`.
+        // Kalshi holds collateral per shard, so a bot trading crypto (shard 2) that read
+        // entry 0 would be watching the weather shard: its own fills would never show up
+        // in cash, and every resync would erase the P&L its kill switch depends on.
+        let dollars = bal["balance_dollars"]
+            .as_str()
             .and_then(|s| Fp::parse(s).ok())
+            .or_else(|| {
+                bal["balance_breakdown"].as_array().map(|bs| {
+                    bs.iter().filter_map(|b| b["balance"].as_str()).filter_map(|s| Fp::parse(s).ok()).sum()
+                })
+            })
             .or_else(|| bal["balance"].as_i64().map(|c| Fp::from_f64(c as f64 / 100.0)))
             .unwrap_or(Fp::ZERO);
         self.cash = dollars;

@@ -33,6 +33,8 @@
   select { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:13px }
   .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:6px }
   .kpi { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px } .kpi .n { font-size:24px; font-weight:600; font-variant-numeric:tabular-nums } .kpi .l { color:var(--muted); font-size:12px; margin-top:2px }
+  .card.stopped{opacity:.55}
+  .stale{margin-left:.5rem;font-size:.75em;font-weight:400;color:#b45309;background:#fef3c7;border-radius:3px;padding:1px 5px}
 </style>
 </head>
 <body>
@@ -149,12 +151,15 @@ function renderNow(){
                   kind==='btc15m' ? `index ${s.spot?Number(s.spot).toFixed(2):'–'} · volatility ${(100*(s.sigma_annual||0)).toFixed(0)}%${s.vol_samples!=null?` · ${s.vol_samples}/${s.vol_min_samples} samples`:''}` :
                   kind==='rule_trader' ? `${s.rules||0} rules · ${s.markets_watched||0} markets watched` :
                   kind==='spread_maker' ? `${(s.markets||[]).length} markets quoted` : '';
-    return `<div class="card"><div class="name"><span class="dot ${live?'live':'dead'}"></span>${NICE[r.run_id]||r.run_id}</div>
+    // Say plainly that a run has stopped. A frozen card looks identical to an idle one,
+    // and "why aren't these numbers moving" is the wrong question to have to ask.
+    const stoppedFor = ago(r.updated_ms);
+    return `<div class="card ${live?'':'stopped'}"><div class="name"><span class="dot ${live?'live':'dead'}"></span>${NICE[r.run_id]||r.run_id}${live?'':`<span class="stale">stopped ${stoppedFor} ago</span>`}</div>
       <div class="what">${WHAT[kind]||''}</div>
       <div class="num ${cls(pnl)}">${money(pnl)}</div>
       <div class="sub">${r.settled_count||0} markets finished · ${r.n_fills||0} trades · ${extra}</div>
       <div class="verdict ${vc}">${vt}</div></div>`;
-  }).join('') || '<div class="muted">No runs.</div>';
+  }).sort((a,b)=>a.includes('stopped')-b.includes('stopped')).join('') || '<div class="muted">No runs.</div>';
 
   $('#ruledList').innerHTML = RULED_OUT.map(([a,b])=>`<li><b>${a}</b><br><span>${b}</span></li>`).join('');
 }
