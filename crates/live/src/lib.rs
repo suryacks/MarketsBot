@@ -173,16 +173,21 @@ impl KalshiExecutor {
             })
             .or_else(|| bal["balance"].as_i64().map(|c| Fp::from_f64(c as f64 / 100.0)))
             .unwrap_or(Fp::ZERO);
-        // A deposit or withdrawal is not profit or loss. Cash we did not trade our way to
-        // must move the baseline with it, or a $60 top-up reads as a $60 gain -- and the
-        // kill switch, which measures equity against that baseline, stops being able to
-        // fire at all. Only large discrete jumps qualify: trading at these sizes never
-        // moves cash by $5 between syncs, so this cannot quietly absorb a real loss.
+        // DO NOT move the baseline to explain a cash change. An earlier version treated any
+        // jump of $5+ as a deposit, on the reasoning that trading never moves cash that far
+        // between syncs. Raising this run's limits to $40 notional and 4 contracts an order
+        // broke that premise the same night: posting collateral moved cash by more than $5,
+        // each move was written off as an external flow, and the baseline chased the losses
+        // down until the kill switch could not see them. It fired at -$21 against a -$15
+        // limit and the account was -$25 by the time it did.
+        //
+        // A kill switch that can be silently disarmed is worse than a P&L figure that is
+        // wrong after a deposit. Report the drift and leave the baseline alone; a genuine
+        // deposit is handled by restarting the run, which rebaselines explicitly.
         if self.initial_cash > Fp::ZERO {
             let drift = dollars.to_f64() - self.cash.to_f64();
             if drift.abs() >= 5.0 {
-                self.initial_cash = self.initial_cash + Fp::from_f64(drift);
-                warn!(drift, new_baseline = %self.initial_cash, "external cash flow: baseline moved, not counted as P&L");
+                warn!(drift, baseline = %self.initial_cash, "unexplained cash movement (baseline deliberately unchanged)");
             }
         }
         self.cash = dollars;
