@@ -71,7 +71,7 @@ impl Default for WeatherLockConfig {
             utc_offset_hours: pairs.iter().map(|(s, _, o)| (s.to_string(), *o)).collect(),
             min_edge: 0.02,
             stake: 2.0,
-            margin_f: 1.0,
+            margin_f: 0.0,
             use_nowcast: true,
             nowcast_mm: 1.0,
             nowcast_max_px: 0.75,
@@ -341,16 +341,27 @@ impl WeatherLock {
             // Observations only ever move one way within a day: the running maximum can
             // rise and the running minimum can fall. So each is a one-sided bound on the
             // official number, and only the side it has already passed is decided.
+            // Compare in the units the market settles in. Kalshi resolves temperature to whole
+            // degrees, while the observation is tenths, so an unrounded compare calls a bucket
+            // dead over a fraction the settlement will round away: a Dallas 101-102 bucket read
+            // 102.2 and looked lost, but the official max rounds to 102 and the bucket wins --
+            // which is why the market was still bidding 99c on it.
             let (decided_yes, decided_no, obs) = if Self::is_low(&m.series) {
                 match lo_obs {
                     // The minimum is an upper bound: it can still get colder, never warmer.
-                    Some((d, mn)) if d == day => (mn <= m.hi - self.cfg.margin_f && m.lo <= -999.0, mn < m.lo - self.cfg.margin_f, mn),
+                    Some((d, mn)) if d == day => {
+                        let r = mn.round();
+                        (r <= m.hi - self.cfg.margin_f && m.lo <= -999.0, r < m.lo - self.cfg.margin_f, mn)
+                    }
                     _ => continue,
                 }
             } else {
                 match hi_obs {
                     // The maximum is a lower bound: it can still get hotter, never cooler.
-                    Some((d, mx)) if d == day => (mx >= m.lo + self.cfg.margin_f && m.hi >= 999.0, mx > m.hi + self.cfg.margin_f && m.hi < 999.0, mx),
+                    Some((d, mx)) if d == day => {
+                        let r = mx.round();
+                        (r >= m.lo + self.cfg.margin_f && m.hi >= 999.0, r > m.hi + self.cfg.margin_f && m.hi < 999.0, mx)
+                    }
                     _ => continue,
                 }
             };

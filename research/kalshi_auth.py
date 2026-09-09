@@ -82,3 +82,30 @@ def markets(**params):
         cursor = d.get("cursor") or ""
         if not cursor:
             return
+
+
+def post(path, body, tries=3):
+    """POST a Kalshi path with a JSON body (signed the same way as GET)."""
+    key, kid = _creds()
+    for i in range(tries):
+        try:
+            ts = str(int(time.time() * 1000))
+            sig = key.sign(
+                (ts + "POST" + "/trade-api/v2" + path).encode(),
+                padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+                hashes.SHA256(),
+            )
+            req = urllib.request.Request(BASE + path, data=json.dumps(body).encode(), method="POST", headers={
+                "KALSHI-ACCESS-KEY": kid,
+                "KALSHI-ACCESS-TIMESTAMP": ts,
+                "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
+                "Content-Type": "application/json",
+                "User-Agent": "marketsbot-research",
+            })
+            with urllib.request.urlopen(req, timeout=40) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            return {"__err": f"{e.code} {e.read().decode()[:300]}"}
+        except Exception:  # noqa: BLE001
+            time.sleep(1.5 * (i + 1))
+    return {"__err": "failed"}

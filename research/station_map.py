@@ -138,7 +138,8 @@ def main():
                         vals = ext.get(day)
                         if not vals:
                             continue
-                        mine = max(vals) if kind == "HIGH" else min(vals)
+                        # Round as the settlement does: Kalshi resolves to whole degrees.
+                        mine = round(max(vals)) if kind == "HIGH" else round(min(vals))
                         diffs.append(mine - official)
                     if len(diffs) < 5:
                         continue
