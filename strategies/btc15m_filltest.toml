@@ -70,3 +70,20 @@ maker_qty = 10.0
 # Sized so the answer costs almost nothing: 2 contracts a market, ~$0.60 of
 # capital per market, $3 of total exposure, $2 kill switch.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# RESULT (2026-09-09). Do not run again until the fill feed is shard-aware.
+#
+# Orders reached the book for the first time once collateral was moved to shard 2
+# and create_order started passing exchange_index. 8 post-only quotes, 3 contracts
+# filled -- about 37%, against the paper queue model's 120 fills from 11,610
+# resting orders (1.03%). Live filled roughly 36x more readily than modelled, and
+# the mark moved against the position immediately, which is what taking the other
+# side of informed flow looks like. Tiny sample, one market, one volatile window.
+#
+# UNSAFE UNTIL FIXED: the `fill` websocket channel delivered nothing for shard 2.
+# The bot held 3 contracts while reporting n_fills = 0 and only learned its own
+# position from the 60 s account resync -- long enough to quote past the 2-contract
+# inventory cap. Shard 0 fills arrive normally, so the subscription is shard-scoped.
+# A maker blind to its own fills has no working inventory limit.
+# ---------------------------------------------------------------------------
