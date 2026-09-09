@@ -1,3 +1,7 @@
+# NOTE: Kalshi names these `yes_bid_dollars`/`yes_ask_dollars` (decimal strings), not
+# `yes_bid`/`yes_ask`. Reading the short names silently yields None on every market and
+# makes a liquid book look empty -- which is exactly how a scan once "proved" that
+# 27,000 combo markets had no liquidity at all.
 """Cross-venue lead–lag and price gaps: Kalshi vs Polymarket on the same events.
 
 1. Pull top-volume active markets on both venues, match them by title tokens
@@ -123,7 +127,7 @@ def kalshi_hist(series, ticker, start, end):
     d = get(f"{K}/series/{series}/markets/{ticker}/candlesticks?start_ts={start}&end_ts={end}&period_interval=60")
     pts = []
     for c in d.get("candlesticks", []):
-        b, a = c.get("yes_bid", {}).get("close_dollars"), c.get("yes_ask", {}).get("close_dollars")
+        b, a = c.get("yes_bid_dollars", {}).get("close_dollars"), c.get("yes_ask_dollars", {}).get("close_dollars")
         if b and a and 0 < float(b) and float(a) < 1:
             pts.append((c["end_period_ts"] // 3600 * 3600, (float(a) + float(b)) / 2))
         elif c.get("price", {}).get("close_dollars"):
@@ -161,7 +165,7 @@ def xcorr(kx, px):
 def main():
     days = int(arg("--days", 14))
     top = int(arg("--top", 400))
-    min_sim = float(arg("--min-sim", 0.5))
+    min_sim = float(arg("--min-sim", 0.35))
     km = kalshi_markets(top)
     pm = poly_markets(top)
     print(f"{len(km)} Kalshi markets, {len(pm)} Polymarket markets")

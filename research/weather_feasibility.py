@@ -1,3 +1,7 @@
+# NOTE: Kalshi names these `yes_bid_dollars`/`yes_ask_dollars` (decimal strings), not
+# `yes_bid`/`yes_ask`. Reading the short names silently yields None on every market and
+# makes a liquid book look empty -- which is exactly how a scan once "proved" that
+# 27,000 combo markets had no liquidity at all.
 """Feasibility study: can a public forecast beat Kalshi's daily high-temperature markets?
 
 For every settled market in a series (e.g. KXHIGHNY):
@@ -140,8 +144,8 @@ def market_price_at(series, m, when_utc):
     if not cs:
         return None
     c = cs[-1]
-    bid = c.get("yes_bid", {}).get("close_dollars")
-    ask = c.get("yes_ask", {}).get("close_dollars")
+    bid = c.get("yes_bid_dollars", {}).get("close_dollars")
+    ask = c.get("yes_ask_dollars", {}).get("close_dollars")
     if bid and ask and float(bid) > 0 and float(ask) < 1:
         return float(bid), float(ask)
     p = c.get("price", {}).get("close_dollars")
