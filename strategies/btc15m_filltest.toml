@@ -1,0 +1,72 @@
+# Short-dated crypto binary fair-value strategy (Kalshi KXBTC15M and friends).
+# See crates/strategy/src/config.rs for every field and its default.
+
+series = "KXBTC15M"
+ref_symbol = "BTC-USD"
+
+# Edge required after fees before taking, in probability points (0.03 = 3¢ per contract).
+min_edge = 0.03
+# Fraction of full Kelly. 0.25 is conservative; full Kelly on a mis-specified model is how you blow up.
+kelly_fraction = 0.25
+
+max_contracts_per_market = 2.0
+max_notional_per_market = 2.0
+max_order_qty = 2.0
+# Kalshi rounds each order's fee up to the cent, so 1-lots pay ~4x the nominal rate — but the
+# A/B on 2026-09-05..07 showed small fills are still +EV at >= 3c edge (5 was strictly worse).
+min_order_qty = 1.0
+
+# Settlement is the mean of the last 60 s of the index; don't trade into it.
+no_trade_last_secs = 75
+warmup_secs = 5
+settle_avg_secs = 60.0
+
+# Realized-vol estimator (EWMA of per-second variance) and sanity clamps (annualized).
+vol_lambda = 0.97
+vol_sample_secs = 60.0
+# realized | implied | max | mean. "implied" backs sigma out of the market's own prints, so the
+# model borrows the crowd's tail estimate and keeps only our spot-timing + basis information.
+vol_source = "realized"
+iv_lambda = 0.98
+
+# Risk: no averaging down, and never more than this fraction of cash in one 15-minute market.
+max_entries_per_market = 3
+notional_frac_of_cash = 0.05
+vol_floor_annual = 0.08
+vol_cap_annual = 2.0
+
+requote_ms = 1000
+min_touch_qty = 1.0
+allow_unwind = false
+
+# The model beats the market only with >= 5 min to expiry; inside that the market has the live index.
+min_tau_secs = 300
+
+# Coinbase last-trade vs BRTI basis, learned from each market's strike (strike == 60s index avg before open).
+auto_basis = true
+ref_basis = 0.0
+basis_lambda = 0.9
+
+# Tail control. 10-day calibration (2026-08-28..09-07) showed the raw model is overconfident at the
+# extremes (model 0.97 -> realized 0.90); shrink toward the market and stay out of the tails.
+market_blend = 0.5
+fair_min = 0.0
+fair_max = 1.0
+
+# Maker mode: rest post-only quotes at fair -/+ min_edge. KXBTC15M charges makers no fee.
+maker = true
+maker_qty = 10.0
+
+# ---------------------------------------------------------------------------
+# FILL TEST, not a profit bet. The paper run is +$19.30 over 30 settled markets,
+# but t = 0.73 and removing the best 3 markets turns it into -$6.08 -- that is
+# noise, and reaching t = 2 at this effect size needs ~227 markets.
+#
+# What paper genuinely cannot answer is whether live fills behave like the queue
+# model, which granted 120 fills from 11,610 resting orders, all at-price and
+# none through. That number decides whether every maker backtest we run is
+# believable, so it is worth a few dollars to measure directly.
+#
+# Sized so the answer costs almost nothing: 2 contracts a market, ~$0.60 of
+# capital per market, $3 of total exposure, $2 kill switch.
+# ---------------------------------------------------------------------------
