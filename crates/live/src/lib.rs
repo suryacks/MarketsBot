@@ -243,6 +243,12 @@ impl KalshiExecutor {
         // Positions are authoritative again, so nothing is unaccounted for.
         self.sent_since_sync.clear();
         info!(cash = %self.cash, positions = self.positions.len(), "account synced");
+        // Check the loss limit HERE, not only when a fill arrives. On a shard whose fill
+        // stream is silent no fill ever arrives, so a switch armed only on fills is never
+        // evaluated: 197 orders traded, 0 fills recorded, and a $10 limit ran to $20.53
+        // before a settlement finally triggered a check. The account poll is the one event
+        // guaranteed to happen, so the limit is enforced against it.
+        self.check_kill_switch();
         Ok(())
     }
 
