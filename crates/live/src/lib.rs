@@ -489,7 +489,9 @@ impl KalshiExecutor {
             "n_fills": self.fills.len(), "settled_count": 0, "settled_wins": 0, "settled": [], "markets_seen": self.books.len(),
             "positions": positions,
             "open_orders": self.orders.iter().map(|(id, o)| json!({"id": id.0, "ticker": o.req.ticker, "action": format!("{:?}", o.req.action), "yes_px": o.req.yes_px.to_f64(), "qty": o.req.qty.to_f64(), "remaining": o.remaining.to_f64(), "ahead": 0, "tag": o.req.tag, "kalshi_id": o.kalshi_id})).collect::<Vec<_>>(),
-            "books": self.books.iter().map(|(t, b)| (t.clone(), json!({"bid": b.best_bid().map(|(p, q)| [p.to_f64(), q.to_f64()]), "ask": b.best_ask().map(|(p, q)| [p.to_f64(), q.to_f64()]), "mid": b.mid().map(|m| m.to_f64()), "ts_ms": b.ts_ms}))).collect::<serde_json::Map<_, _>>(),
+            // Bounded for the same reason as the backtest snapshot: publish what we are acting
+            // on plus what is currently live, not every book the feed has ever mentioned.
+            "books": self.books.iter().filter(|(t, b)| self.positions.contains_key(*t) || self.orders.values().any(|o| &o.req.ticker == *t) || self.now_ms - b.ts_ms < 300_000).map(|(t, b)| (t.clone(), json!({"bid": b.best_bid().map(|(p, q)| [p.to_f64(), q.to_f64()]), "ask": b.best_ask().map(|(p, q)| [p.to_f64(), q.to_f64()]), "mid": b.mid().map(|m| m.to_f64()), "ts_ms": b.ts_ms}))).collect::<serde_json::Map<_, _>>(),
             "fills": [],
             "queue": {"rested": self.sent, "avg_ahead": 0, "reached_front": 0, "fills_at_price": 0, "fills_through": 0},
             "risk": {"max_notional": self.cfg.max_notional, "at_risk": self.notional_at_risk(), "max_loss": self.cfg.max_loss, "halted": self.halted, "rejected": self.rejected, "dry_run": self.cfg.dry_run},

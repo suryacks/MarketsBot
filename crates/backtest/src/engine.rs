@@ -113,10 +113,23 @@ impl Backtester {
                        "qty": r.qty.to_f64(), "remaining": rem.to_f64(), "ahead": ahead.to_f64(), "tag": r.tag})
             })
             .collect();
+        // Only publish books we are actually acting on. Dumping every book ever seen wrote a
+        // 40 MB snapshot every second for an --all-open run (366,167 of them), which the
+        // dashboard re-parsed each poll and grew to 1.7 GB doing it.
+        let resting = self.sim.resting_orders();
+        let keep: std::collections::HashSet<String> = self
+            .sim
+            .positions()
+            .values()
+            .filter(|p| !p.yes_qty.is_zero() || p.n_fills > 0)
+            .map(|p| p.ticker.clone())
+            .chain(resting.iter().map(|(_, r, _, _)| r.ticker.clone()))
+            .collect();
         let books: serde_json::Map<String, serde_json::Value> = self
             .sim
             .books()
             .iter()
+            .filter(|(t, b)| keep.contains(*t) || now - b.ts_ms < 300_000)
             .map(|(t, b)| {
                 (
                     t.clone(),
