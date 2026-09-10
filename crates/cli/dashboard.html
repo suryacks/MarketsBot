@@ -165,7 +165,11 @@ function renderNow(){
     // Say plainly that a run has stopped. A frozen card looks identical to an idle one,
     // and "why aren't these numbers moving" is the wrong question to have to ask.
     const stoppedFor = ago(r.updated_ms);
-    return `<div class="card ${live?'':'stopped'}"><div class="name"><span class="dot ${live?'live':'dead'}"></span>${NICE[r.run_id]||r.run_id}${live?'':`<span class="stale">stopped ${stoppedFor} ago</span>`}</div>
+    // A run that rejects every order looks identical to a quiet one. Say so: 13,507
+    // rejections and no fills went unnoticed for over two hours because nothing showed it.
+    const rk = r.risk || {};
+    const stuck = live && (rk.rejected||0) > 50 && (r.queue||{}).rested === 0;
+    return `<div class="card ${live?'':'stopped'}"><div class="name"><span class="dot ${live?'live':'dead'}"></span>${NICE[r.run_id]||r.run_id}${live?'':`<span class="stale">stopped ${stoppedFor} ago</span>`}${stuck?`<span class="stale">${rk.rejected} orders refused by its own risk limits — placing nothing</span>`:''}</div>
       <div class="what">${WHAT[kind]||''}</div>
       <div class="num ${cls(pnl)}">${money(pnl)}</div>
       <div class="sub">${r.settled_count||0} markets finished · ${r.n_fills||0} trades · ${extra}</div>

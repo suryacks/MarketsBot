@@ -9,9 +9,9 @@ min_edge = 0.03
 # Fraction of full Kelly. 0.25 is conservative; full Kelly on a mis-specified model is how you blow up.
 kelly_fraction = 0.25
 
-max_contracts_per_market = 30.0
-max_notional_per_market = 12.0
-max_order_qty = 5.0
+max_contracts_per_market = 10.0
+max_notional_per_market = 4.0
+max_order_qty = 2.0
 # Kalshi rounds each order's fee up to the cent, so 1-lots pay ~4x the nominal rate — but the
 # A/B on 2026-09-05..07 showed small fills are still +EV at >= 3c edge (5 was strictly worse).
 min_order_qty = 1.0
@@ -31,7 +31,7 @@ iv_lambda = 0.98
 
 # Risk: no averaging down, and never more than this fraction of cash in one 15-minute market.
 max_entries_per_market = 3
-notional_frac_of_cash = 0.40
+notional_frac_of_cash = 0.25
 vol_floor_annual = 0.08
 vol_cap_annual = 2.0
 
@@ -55,7 +55,7 @@ fair_max = 1.0
 
 # Maker mode: rest post-only quotes at fair -/+ min_edge. KXBTC15M charges makers no fee.
 maker = true
-maker_qty = 10.0
+maker_qty = 4.0   # must not exceed the run's --max-order-qty, or every order is rejected
 
 # ---------------------------------------------------------------------------
 # Sized up at the account owner's direction. It was quoting one contract a market
