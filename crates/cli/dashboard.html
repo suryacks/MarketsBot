@@ -76,7 +76,7 @@
   <div class="headline"><h2>What the bot is thinking right now</h2><p>The arithmetic behind every decision, so you can check it by hand. <b>Weather</b> asks whether the day's temperature has already ruled a bucket out. <b>Crypto</b> asks how far the strike is from the index in standard deviations, and turns that into a price.</p></div>
   <h3>Weather — is this bucket already impossible?</h3>
   <p class="muted small">A day's high only rises and its low only falls, so once the reading passes a bucket, that bucket cannot win. Readings are whole degrees Fahrenheit, so the true value is within half a degree either side — only the cautious end is used, and settlement moves a whole degree at a time.</p>
-  <div class="scroll"><table id="wxThink"><thead><tr><th>market</th><th>station</th><th>bucket</th><th>reading so far</th><th>cautious value</th><th>needs</th><th>verdict</th><th>reasoning</th></tr></thead><tbody></tbody></table></div>
+  <div class="scroll"><table id="wxThink"><thead><tr><th>market</th><th>station</th><th>bucket</th><th>reading so far</th><th>cautious value</th><th>needs</th><th>verdict</th><th>best bid</th><th>why not traded</th><th>reasoning</th></tr></thead><tbody></tbody></table></div>
   <h3 style="margin-top:22px">Crypto — what is this contract worth?</h3>
   <p class="muted small">fair = &Phi;( (ln(index/strike) &minus; &frac12;&sigma;&sup2;&tau;) / &sigma;&radic;&tau; ) — the chance the index finishes above the strike, given how much it typically moves in the time left.</p>
   <div class="kpis" id="cryptoKpis"></div>
@@ -228,14 +228,30 @@ function renderThinking(runs){
   const th = wx ? wx.strategy_state.thinking : [];
   // dead ones first: those are the ones that can actually be traded
   th.sort((a,b)=> (b.verdict.startsWith('DEAD')?1:0)-(a.verdict.startsWith('DEAD')?1:0));
-  $('#wxThink tbody').innerHTML = th.slice(0,120).map(t=>`<tr>
+  const books = wx ? (wx.books||{}) : {};
+  // A dead bucket is only money if somebody is bidding on it. Say so here, rather
+  // than leaving "42 dead, 0 traded" to look like a fault.
+  const blocked = t => {
+    if (!t.verdict.startsWith('DEAD')) return ['', 'not decided yet'];
+    const b = books[t.ticker];
+    if (!b) return ['–', 'no orderbook'];
+    if (!b.bid) return ['–', 'nobody is bidding — nothing to sell into'];
+    const px = b.bid[0];
+    if (px < 0.02) return [(100*px).toFixed(0)+'¢', 'bid below the 2¢ floor'];
+    return [(100*px).toFixed(0)+'¢', t.traded ? 'already traded' : 'TRADEABLE'];
+  };
+  $('#wxThink tbody').innerHTML = th.slice(0,120).map(t=>{
+    const [bid, why] = blocked(t);
+    return `<tr>
      <td>${t.ticker}</td><td>${t.station}</td><td>${t.bucket}</td>
      <td>${t.observed==null?'–':t.observed.toFixed(0)+'°'}</td>
      <td>${t.conservative==null?'–':t.conservative.toFixed(1)+'°'}</td>
      <td>${t.needs==null?'–':t.needs.toFixed(0)+'°'}</td>
-     <td class="${t.verdict.startsWith('DEAD')?'pos':'muted'}">${t.verdict}${t.traded?' · traded':''}</td>
-     <td class="muted" style="text-align:left;white-space:normal">${t.explain||''}</td></tr>`).join('')
-     || '<tr><td colspan=8 class="muted">no weather run is reporting yet</td></tr>';
+     <td class="${t.verdict.startsWith('DEAD')?'pos':'muted'}">${t.verdict}</td>
+     <td>${bid}</td>
+     <td class="${why==='TRADEABLE'?'pos':'muted'}">${why}</td>
+     <td class="muted" style="text-align:left;white-space:normal">${t.explain||''}</td></tr>`;}).join('')
+     || '<tr><td colspan=10 class="muted">no weather run is reporting yet</td></tr>';
 
   const cx = runs.find(r=>(r.strategy_state||{}).kind==='btc15m');
   const s = cx ? cx.strategy_state : null;
