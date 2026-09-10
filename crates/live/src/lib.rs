@@ -94,6 +94,10 @@ pub struct KalshiExecutor {
     sent_since_sync: HashMap<String, Fp>,
     /// Settled markets that lost money, consecutively, most recent last.
     loss_streak: u32,
+    /// Settlements already accounted for, so the poll does not count one twice.
+    seen_settlements: HashSet<String>,
+    /// False until the first poll has recorded the account's existing history.
+    settlements_primed: bool,
     /// Realized P&L from markets that settled while this run was up. Together with the
     /// unrealized marks this gives a P&L derived from our own trades, which no deposit,
     /// withdrawal or shard transfer can move.
@@ -160,6 +164,8 @@ impl KalshiExecutor {
             portfolio_value: 0.0,
             session_realized: 0.0,
             loss_streak: 0,
+            seen_settlements: HashSet::new(),
+            settlements_primed: false,
             sent_since_sync: HashMap::new(),
             positions: HashMap::new(),
             cash: Fp::ZERO,
@@ -224,6 +230,19 @@ impl KalshiExecutor {
         self.cash = dollars;
         self.portfolio_value = bal["portfolio_value"].as_f64().map(|c| c / 100.0).unwrap_or(0.0);
         let pos = self.client.get_positions().await?;
+        // Tickers the exchange still reports a position for. Anything we hold that is NOT
+        // here has either settled or been closed, which is how a run on a silent shard
+        // discovers its markets resolved.
+        let mut live_tickers: HashSet<String> = HashSet::new();
+        if let Some(mps) = pos["market_positions"].as_array() {
+            for mp in mps {
+                if let Some(t) = mp["ticker"].as_str() {
+                    if mp["position_fp"].as_str().and_then(|s| s.parse::<f64>().ok()).is_some_and(|q| q != 0.0) {
+                        live_tickers.insert(t.to_string());
+                    }
+                }
+            }
+        }
         if let Some(mps) = pos["market_positions"].as_array() {
             for mp in mps {
                 let t = mp["ticker"].as_str().unwrap_or("").to_string();
@@ -250,6 +269,62 @@ impl KalshiExecutor {
                 }
             }
         }
+        // Learn about settlements from the poll, not the websocket. The settlement channel
+        // delivers nothing on shards other than 0, so a run there saw `settled 0` while three
+        // markets in a row resolved against it and the losing-streak breaker never armed.
+        //
+        // P&L comes from OUR position, not from the settlement row's revenue minus cost:
+        // those costs are gross across every fill, so a maker that buys and sells the same
+        // contract repeatedly looks like a loss on a market it actually won. And the first
+        // poll only records what already settled -- counting the account's history as a
+        // fresh losing streak halted the run before it placed an order.
+        if let Ok(v) = self.client.get_settlements(50).await {
+            let mut results: HashMap<String, String> = HashMap::new();
+            for row in v["settlements"].as_array().cloned().unwrap_or_default() {
+                if let (Some(ev), Some(res)) = (row["event_ticker"].as_str(), row["market_result"].as_str()) {
+                    results.insert(ev.to_string(), res.to_string());
+                }
+            }
+            let gone: Vec<String> = self
+                .positions
+                .keys()
+                .filter(|t| !live_tickers.contains(*t) && self.owns(t))
+                .cloned()
+                .collect();
+            for t in gone {
+                let Some(p) = self.positions.remove(&t) else { continue };
+                let ev = t.rsplit_once('-').map(|(e, _)| e.to_string()).unwrap_or_else(|| t.clone());
+                let Some(res) = results.get(&ev) else {
+                    continue; // not settled, just no longer reported — leave the streak alone
+                };
+                if !self.seen_settlements.insert(t.clone()) {
+                    continue;
+                }
+                if !self.settlements_primed {
+                    continue; // first pass: record what already happened, do not score it
+                }
+                let q = p.yes_qty;
+                let payout = if res == "yes" { q.max(Fp::from_int(0)) } else { (-q).max(Fp::from_int(0)) };
+                let pnl = (p.cash + payout).to_f64();
+                self.session_realized += pnl;
+                if pnl < 0.0 {
+                    self.loss_streak += 1;
+                } else if pnl > 0.0 {
+                    self.loss_streak = 0;
+                }
+                info!(ticker = %t, result = %res, pnl, streak = self.loss_streak, "settled (polled)");
+                if self.cfg.max_consecutive_losses > 0 && self.loss_streak >= self.cfg.max_consecutive_losses && !self.halted {
+                    error!(streak = self.loss_streak, "LOSING STREAK: halting and cancelling all orders");
+                    self.halted = true;
+                    let ids: Vec<OrderId> = self.orders.keys().copied().collect();
+                    for id in ids {
+                        self.cancel(id);
+                    }
+                }
+            }
+            self.settlements_primed = true;
+        }
+
         // Positions are authoritative again, so nothing is unaccounted for.
         self.sent_since_sync.clear();
         info!(cash = %self.cash, positions = self.positions.len(), "account synced");

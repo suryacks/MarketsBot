@@ -277,6 +277,13 @@ impl KalshiClient {
         self.get("/portfolio/balance", &[]).await
     }
 
+    /// Settled markets, newest first. The websocket settlement channel is silent on shards
+    /// other than 0, so this poll is the only way a run there learns a market resolved.
+    pub async fn get_settlements(&self, limit: u32) -> Result<serde_json::Value> {
+        self.require_auth()?;
+        self.get("/portfolio/settlements", &[("limit", limit.to_string())]).await
+    }
+
     pub async fn get_positions(&self) -> Result<serde_json::Value> {
         self.require_auth()?;
         self.get("/portfolio/positions", &[("limit", "1000".into())]).await
