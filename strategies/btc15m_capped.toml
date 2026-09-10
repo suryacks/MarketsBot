@@ -9,9 +9,9 @@ min_edge = 0.03
 # Fraction of full Kelly. 0.25 is conservative; full Kelly on a mis-specified model is how you blow up.
 kelly_fraction = 0.25
 
-max_contracts_per_market = 10.0
-max_notional_per_market = 5.0
-max_order_qty = 2.0
+max_contracts_per_market = 25.0
+max_notional_per_market = 10.0
+max_order_qty = 5.0
 # Kalshi rounds each order's fee up to the cent, so 1-lots pay ~4x the nominal rate — but the
 # A/B on 2026-09-05..07 showed small fills are still +EV at >= 3c edge (5 was strictly worse).
 min_order_qty = 1.0
@@ -31,7 +31,7 @@ iv_lambda = 0.98
 
 # Risk: no averaging down, and never more than this fraction of cash in one 15-minute market.
 max_entries_per_market = 3
-notional_frac_of_cash = 0.03
+notional_frac_of_cash = 0.20
 vol_floor_annual = 0.08
 vol_cap_annual = 2.0
 
@@ -58,17 +58,14 @@ maker = true
 maker_qty = 10.0
 
 # ---------------------------------------------------------------------------
-# Run at the account owner's direction, at $5 a market, after being shown that the
-# strategy does not replicate: 30 BTC markets gave +$19.30 at t = 0.73, but the same
-# model on ETH, SOL and XRP -- 65 fresh markets it was never fitted to -- came back
-# -$5.35. The positive number is the outlier of four, not the signal.
+# Sized up at the account owner's direction. It was quoting one contract a market
+# because notional_frac_of_cash held each market to 3% of cash (~$1.40); the stops
+# were never the binding constraint. Now up to $10 and 25 contracts a market.
 #
-# This is not a coin flip. A maker's fills are selected against it: the resting bid
-# is hit when price is about to fall and the ask is lifted when it is about to rise,
-# so the fill-conditional win rate runs well below the base rate. The favourite-maker
-# won 84% of its markets and still lost money for exactly this reason.
+# The risk is bounded by the stops, not by the size: $5 of loss ends a market, three
+# losing markets in a row ends the run, and $15 ends it outright. Bigger positions
+# reach those limits faster -- they do not raise them.
 #
-# Bounded three ways, because the previous run showed a position cap alone is not a
-# loss cap: $5 held per market, $2 of loss per market (which stops the 129-fill
-# round-tripping that did the damage), and $10 for the run.
+# Still not an edge. 263 settled paper markets give t = 0.62, a result a zero-edge
+# strategy reproduces 28% of the time, and three live runs went -$23, +$19, -$20.
 # ---------------------------------------------------------------------------
