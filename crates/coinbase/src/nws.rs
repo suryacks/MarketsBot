@@ -78,7 +78,10 @@ pub fn rain_station(city: &str) -> Option<&'static str> {
     RAIN_STATIONS.iter().find(|(c, _)| *c == city).map(|(_, s)| *s)
 }
 
-pub async fn run(stations: Vec<String>, every: Duration, tx: mpsc::Sender<MarketEvent>) -> Result<()> {
+/// `emit_temperature`: false when IEM supplies temperature. NWS publishes whole degrees
+/// Celsius, so its Fahrenheit conversion is up to 0.9 F out and must not be mixed into the
+/// same running extremes as IEM's true Fahrenheit readings.
+pub async fn run(stations: Vec<String>, every: Duration, tx: mpsc::Sender<MarketEvent>, emit_temperature: bool) -> Result<()> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent("marketsbot (research; contact via github.com/suryacks/MarketsBot)")
@@ -110,8 +113,8 @@ pub async fn run(stations: Vec<String>, every: Duration, tx: mpsc::Sender<Market
                     })
                     .unwrap_or_default();
                 obs.sort_by_key(|(ts, _)| *ts); // oldest first, so the day rollover lands correctly
-                let n = obs.len();
-                for (ts_ms, f) in obs {
+                let n = if emit_temperature { obs.len() } else { 0 };
+                for (ts_ms, f) in obs.into_iter().filter(|_| emit_temperature) {
                     let _ = tx.send(MarketEvent::Ref(RefPrice { source: SOURCE.into(), symbol: s.clone(), ts_ms, px: f, avg_60s: None })).await;
                 }
                 info!(station = %s, observations = n, "backfilled");
@@ -133,7 +136,7 @@ pub async fn run(stations: Vec<String>, every: Duration, tx: mpsc::Sender<Market
                         if last_seen.get(s) != Some(&ts) {
                             last_seen.insert(s.clone(), ts.clone());
                             let ts_ms = chrono::DateTime::parse_from_rfc3339(&ts).map(|d| d.timestamp_millis()).unwrap_or_else(|_| chrono::Utc::now().timestamp_millis());
-                            if let Some(c) = p["temperature"]["value"].as_f64() {
+                            if let Some(c) = p["temperature"]["value"].as_f64().filter(|_| emit_temperature) {
                                 let _ = tx
                                     .send(MarketEvent::Ref(RefPrice { source: SOURCE.into(), symbol: s.clone(), ts_ms, px: c * 9.0 / 5.0 + 32.0, avg_60s: None }))
                                     .await;

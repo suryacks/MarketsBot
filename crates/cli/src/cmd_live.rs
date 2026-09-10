@@ -248,9 +248,20 @@ pub async fn start_feeds_with(a: &FeedArgs, with_fills: bool) -> Result<Feeds> {
         stations.sort();
         stations.dedup();
         if !stations.is_empty() {
+            // Temperature comes from IEM, in degrees F -- the unit Kalshi settles in and the
+            // source the strategy was validated against. NWS stays only for precipitation:
+            // it reports whole degrees Celsius, and mixing its 0.9 F conversion error into
+            // the running extremes is what sold an 88-89 bucket that settled at 89.
+            let txi = tx.clone();
+            let iem_stations = stations.clone();
+            tokio::spawn(async move {
+                if let Err(e) = mb_coinbase::iem::run(iem_stations, Duration::from_secs(120), txi).await {
+                    warn!(error = %e, "IEM feed ended");
+                }
+            });
             let txc = tx.clone();
             tokio::spawn(async move {
-                if let Err(e) = mb_coinbase::nws::run(stations, Duration::from_secs(60), txc).await {
+                if let Err(e) = mb_coinbase::nws::run(stations, Duration::from_secs(60), txc, false).await {
                     warn!(error = %e, "nws feed ended");
                 }
             });
@@ -595,6 +606,9 @@ pub struct LiveArgs {
     /// Kill switch: halt and cancel everything once equity drops this much below start
     #[arg(long, default_value_t = 50.0)]
     pub max_loss: f64,
+    /// Halt after this many settled markets in a row that lost money (0 = no limit).
+    #[arg(long, default_value_t = 0)]
+    pub max_consecutive_losses: u32,
     /// Stop trading any single market once it has lost this much (0 = no limit). Catches
     /// churn a position cap cannot: one market took 129 fills round-tripping the same few
     /// contracts and lost several times what it was ever allowed to hold.
@@ -638,6 +652,7 @@ pub async fn live(a: LiveArgs) -> Result<()> {
         max_open_orders: a.max_open_orders,
         max_loss: a.max_loss,
         max_loss_per_market: a.max_loss_per_market,
+        max_consecutive_losses: a.max_consecutive_losses,
         dry_run: a.dry_run,
         series: a.paper.feed.series.clone(),
     };

@@ -23,6 +23,12 @@ pub struct LiveConfig {
     pub max_order_qty: f64,
     pub max_open_orders: usize,
     pub max_loss: f64,
+    /// Halt after this many settled markets in a row that lost money (0 = no limit).
+    ///
+    /// A per-market stop bounds one market and the run limit bounds the day; neither notices
+    /// a strategy that has simply stopped working and is bleeding steadily. A losing streak
+    /// does, and it stops the run while there is still money to think with.
+    pub max_consecutive_losses: u32,
     /// Stop trading a single market once it has lost this much (0 = no limit).
     ///
     /// A position cap is not a loss cap. It bounds what we hold at one moment and says
@@ -47,6 +53,7 @@ impl Default for LiveConfig {
             max_order_qty: 5.0,
             max_open_orders: 20,
             max_loss: 50.0,
+            max_consecutive_losses: 0,
             max_loss_per_market: 0.0,
             dry_run: false,
             series: Vec::new(),
@@ -85,6 +92,8 @@ pub struct KalshiExecutor {
     /// inside that window: a 10-contract cap was carried to 19 this way, and to 66 the night
     /// before. Assuming the worst about orders in flight is the only safe accounting.
     sent_since_sync: HashMap<String, Fp>,
+    /// Settled markets that lost money, consecutively, most recent last.
+    loss_streak: u32,
     /// Realized P&L from markets that settled while this run was up. Together with the
     /// unrealized marks this gives a P&L derived from our own trades, which no deposit,
     /// withdrawal or shard transfer can move.
@@ -150,6 +159,7 @@ impl KalshiExecutor {
             books: HashMap::new(),
             portfolio_value: 0.0,
             session_realized: 0.0,
+            loss_streak: 0,
             sent_since_sync: HashMap::new(),
             positions: HashMap::new(),
             cash: Fp::ZERO,
@@ -441,8 +451,22 @@ impl KalshiExecutor {
                     let q = p.yes_qty;
                     let payout = if *result == mb_core::Outcome::Yes { q.max(Fp::from_int(0)) } else { (-q).max(Fp::from_int(0)) };
                     self.cash += payout;
-                    self.session_realized += (p.cash + payout).to_f64();
-                    info!(ticker, ?result, pnl = %(p.cash + payout), "settled");
+                    let pnl = (p.cash + payout).to_f64();
+                    self.session_realized += pnl;
+                    if pnl < 0.0 {
+                        self.loss_streak += 1;
+                    } else if pnl > 0.0 {
+                        self.loss_streak = 0;
+                    }
+                    info!(ticker, ?result, pnl, streak = self.loss_streak, "settled");
+                    if self.cfg.max_consecutive_losses > 0 && self.loss_streak >= self.cfg.max_consecutive_losses && !self.halted {
+                        error!(streak = self.loss_streak, "LOSING STREAK: halting and cancelling all orders");
+                        self.halted = true;
+                        let ids: Vec<OrderId> = self.orders.keys().copied().collect();
+                        for id in ids {
+                            self.cancel(id);
+                        }
+                    }
                 }
                 let ids: Vec<OrderId> = self.orders.iter().filter(|(_, o)| &o.req.ticker == ticker).map(|(id, _)| *id).collect();
                 for id in ids {
@@ -494,7 +518,7 @@ impl KalshiExecutor {
             "books": self.books.iter().filter(|(t, b)| self.positions.contains_key(*t) || self.orders.values().any(|o| &o.req.ticker == *t) || self.now_ms - b.ts_ms < 300_000).map(|(t, b)| (t.clone(), json!({"bid": b.best_bid().map(|(p, q)| [p.to_f64(), q.to_f64()]), "ask": b.best_ask().map(|(p, q)| [p.to_f64(), q.to_f64()]), "mid": b.mid().map(|m| m.to_f64()), "ts_ms": b.ts_ms}))).collect::<serde_json::Map<_, _>>(),
             "fills": [],
             "queue": {"rested": self.sent, "avg_ahead": 0, "reached_front": 0, "fills_at_price": 0, "fills_through": 0},
-            "risk": {"max_notional": self.cfg.max_notional, "at_risk": self.notional_at_risk(), "max_loss": self.cfg.max_loss, "halted": self.halted, "rejected": self.rejected, "dry_run": self.cfg.dry_run},
+            "risk": {"loss_streak": self.loss_streak, "max_consecutive_losses": self.cfg.max_consecutive_losses, "max_notional": self.cfg.max_notional, "at_risk": self.notional_at_risk(), "max_loss": self.cfg.max_loss, "halted": self.halted, "rejected": self.rejected, "dry_run": self.cfg.dry_run},
             "strategy_state": strategy_state,
         })
     }

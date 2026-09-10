@@ -10,6 +10,22 @@
 //! and safe; the residual risk is a station/report mismatch.
 
 use crate::btc15m::kalshi_tick;
+
+/// How far a reported temperature can sit from the real one.
+///
+/// Observations come from IEM in whole degrees Fahrenheit — the unit Kalshi settles in — so a
+/// reading of 89 means the truth lies in [88.5, 89.5). Half a degree is the whole error.
+///
+/// It used to be api.weather.gov, which publishes whole degrees CELSIUS: 32 C converts to
+/// 89.6 F while the truth is anywhere in [88.7, 90.5), and that read Atlanta's real 89 F
+/// maximum as 89.6, sold an 88-89 bucket as already lost, and watched it settle at 89. The
+/// strategy had been validated against IEM all along, so the study and the live bot were
+/// never the same measurement. They are now.
+///
+/// The remaining error is sampling: observations are hourly, so the true peak between them
+/// can be missed. That biases the observed maximum DOWN and the minimum UP, which is the
+/// safe direction — it costs trades, never correctness.
+const OBSERVATION_TOLERANCE_F: f64 = 0.5;
 use anyhow::{Context as _, Result};
 use mb_core::{Context, Fp, MarketEvent, OrderRequest, Strategy, Tif};
 use serde::{Deserialize, Serialize};
@@ -346,21 +362,26 @@ impl WeatherLock {
             // dead over a fraction the settlement will round away: a Dallas 101-102 bucket read
             // 102.2 and looked lost, but the official max rounds to 102 and the bucket wins --
             // which is why the market was still bidding 99c on it.
+            // Settlement is a whole number of degrees F, so a bucket is only dead once the
+            // official value must be at least one degree past it. Compare against the
+            // conservative end of the observation's range, never its midpoint.
             let (decided_yes, decided_no, obs) = if Self::is_low(&m.series) {
                 match lo_obs {
-                    // The minimum is an upper bound: it can still get colder, never warmer.
+                    // The minimum only falls, so it bounds the official value from above —
+                    // and the warmest it could really be is the reading plus the quantization.
                     Some((d, mn)) if d == day => {
-                        let r = mn.round();
-                        (r <= m.hi - self.cfg.margin_f && m.lo <= -999.0, r < m.lo - self.cfg.margin_f, mn)
+                        let warmest = mn + OBSERVATION_TOLERANCE_F + self.cfg.margin_f;
+                        (warmest <= m.hi && m.lo <= -999.0, warmest <= m.lo - 1.0, mn)
                     }
                     _ => continue,
                 }
             } else {
                 match hi_obs {
-                    // The maximum is a lower bound: it can still get hotter, never cooler.
+                    // The maximum only rises, so it bounds the official value from below —
+                    // and the coolest it could really be is the reading minus the quantization.
                     Some((d, mx)) if d == day => {
-                        let r = mx.round();
-                        (r >= m.lo + self.cfg.margin_f && m.hi >= 999.0, r > m.hi + self.cfg.margin_f && m.hi < 999.0, mx)
+                        let coolest = mx - OBSERVATION_TOLERANCE_F - self.cfg.margin_f;
+                        (coolest >= m.lo && m.hi >= 999.0, coolest >= m.hi + 1.0 && m.hi < 999.0, mx)
                     }
                     _ => continue,
                 }
