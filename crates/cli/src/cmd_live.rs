@@ -656,6 +656,31 @@ pub async fn live(a: LiveArgs) -> Result<()> {
         dry_run: a.dry_run,
         series: a.paper.feed.series.clone(),
     };
+    // Start the volatility estimate warm. From cold it needs vol_min_samples minutes of
+    // observation before the strategy will quote, which every restart pays again.
+    if let Some(b) = strat.as_any_mut().and_then(|a| a.downcast_mut::<Btc15mStrategy>()) {
+        let product = match a.paper.feed.series.first().map(|s| s.as_str()) {
+            Some(s) if s.starts_with("KXETH") => Some("ETH-USD"),
+            Some(s) if s.starts_with("KXSOL") => Some("SOL-USD"),
+            Some(s) if s.starts_with("KXXRP") => Some("XRP-USD"),
+            Some(s) if s.starts_with("KXBTC") => Some("BTC-USD"),
+            _ => None,
+        };
+        if let Some(product) = product {
+            let end = chrono::Utc::now().timestamp();
+            let cb = mb_coinbase::CoinbaseRest::new()?;
+            match cb.candles(product, 60, end - 5400, end).await {
+                Ok(mut cs) => {
+                    cs.sort_by_key(|c| c.ts);
+                    let samples: Vec<(i64, f64)> = cs.iter().map(|c| (c.ts * 1000, c.close)).collect();
+                    let n = samples.len();
+                    b.seed_vol(&samples);
+                    info!(product, candles = n, "seeded volatility from recent history");
+                }
+                Err(e) => warn!(product, error = %e, "volatility seeding failed; will warm up live"),
+            }
+        }
+    }
     let mut ex = mb_live::KalshiExecutor::new(client, cfg).await?;
     for (s, fm) in &feeds.fee_models {
         ex.set_fee_model(s, fm.clone());

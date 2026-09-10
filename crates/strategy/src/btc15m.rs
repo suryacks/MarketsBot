@@ -144,6 +144,19 @@ impl Btc15mStrategy {
     }
 
     /// Fair probability of YES for a tracked market right now.
+    /// Seed the volatility estimate from recent history instead of waiting for it.
+    ///
+    /// The estimator samples at a fixed interval, so from cold it needs `vol_min_samples`
+    /// minutes before it will quote at all — thirty minutes of not trading after every
+    /// restart, paid again each time the process is touched. Past closes carry the same
+    /// information, so feeding them at their real timestamps starts the run warm.
+    /// Samples must be in chronological order.
+    pub fn seed_vol(&mut self, samples: &[(i64, f64)]) {
+        for (ts_ms, px) in samples {
+            self.vol.on_ref(*ts_ms, *px);
+        }
+    }
+
     pub fn fair(&self, ticker: &str, now_ms: i64) -> Option<f64> {
         let a = self.active.get(ticker)?;
         let (_, spot) = self.spot?;
@@ -436,6 +449,10 @@ impl Strategy for Btc15mStrategy {
             }
             MarketEvent::UserFill(_) => {}
         }
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 
     fn snapshot(&self) -> serde_json::Value {

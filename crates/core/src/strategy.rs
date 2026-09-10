@@ -163,6 +163,12 @@ pub trait Strategy: Send {
     fn on_event(&mut self, ev: &MarketEvent, ctx: &mut dyn Context);
     fn on_fill(&mut self, _fill: &Fill, _ctx: &mut dyn Context) {}
     /// Free-form introspection for dashboards (per-market fair values, model state, …).
+    /// Downcast hook, so a caller holding a boxed strategy can reach a concrete one for
+    /// setup a trait cannot express -- seeding a volatility estimate from history, say.
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
+
     fn snapshot(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
