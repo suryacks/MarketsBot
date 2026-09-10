@@ -40,7 +40,7 @@
 <body>
 <header>
   <h1>MarketsBot</h1><span class="muted small" id="clock"></span>
-  <nav><button data-tab="now" class="on">What's happening</button><button data-tab="tests">Strategy tests</button><button data-tab="detail">Details</button><button data-tab="logs">Logs</button></nav>
+  <nav><button data-tab="now" class="on">What's happening</button><button data-tab="tests">Strategy tests</button><button data-tab="thinking">What it's thinking</button><button data-tab="detail">Details</button><button data-tab="logs">Logs</button></nav>
 </header>
 <main>
 
@@ -70,6 +70,17 @@
   <div class="scroll"><table id="famT"><thead><tr><th>family</th><th>information it uses</th><th>variants</th><th>passed</th><th>verdict</th></tr></thead><tbody></tbody></table></div>
   <h3>Rules that passed out-of-sample</h3>
   <div class="scroll"><table id="passT"><thead><tr><th>rule</th><th>markets</th><th>before close</th><th>trades (old half)</th><th>edge</th><th>trades (new half)</th><th>edge</th><th>t</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section id="tab-thinking" hidden>
+  <div class="headline"><h2>What the bot is thinking right now</h2><p>The arithmetic behind every decision, so you can check it by hand. <b>Weather</b> asks whether the day's temperature has already ruled a bucket out. <b>Crypto</b> asks how far the strike is from the index in standard deviations, and turns that into a price.</p></div>
+  <h3>Weather — is this bucket already impossible?</h3>
+  <p class="muted small">A day's high only rises and its low only falls, so once the reading passes a bucket, that bucket cannot win. Readings are whole degrees Fahrenheit, so the true value is within half a degree either side — only the cautious end is used, and settlement moves a whole degree at a time.</p>
+  <div class="scroll"><table id="wxThink"><thead><tr><th>market</th><th>station</th><th>bucket</th><th>reading so far</th><th>cautious value</th><th>needs</th><th>verdict</th><th>reasoning</th></tr></thead><tbody></tbody></table></div>
+  <h3 style="margin-top:22px">Crypto — what is this contract worth?</h3>
+  <p class="muted small">fair = &Phi;( (ln(index/strike) &minus; &frac12;&sigma;&sup2;&tau;) / &sigma;&radic;&tau; ) — the chance the index finishes above the strike, given how much it typically moves in the time left.</p>
+  <div class="kpis" id="cryptoKpis"></div>
+  <div class="scroll"><table id="cxThink"><thead><tr><th>market</th><th>index+basis</th><th>strike</th><th>move needed</th><th>secs left</th><th>1 SD</th><th>SDs away</th><th>fair</th><th>reasoning</th></tr></thead><tbody></tbody></table></div>
 </section>
 
 <section id="tab-detail" hidden>
@@ -208,10 +219,46 @@ $('#runSel')?.addEventListener('change', renderDetail);
 async function loadAll(){
   runs = (await j('/api/runs')).filter(r=>r.run_id);
   lab = await j('/api/lab');
-  renderNow(); renderTests(); renderDetail();
+  renderNow(); renderTests(); renderDetail(); renderThinking(runs);
 }
 async function loadUniverse(){ try { uni = await j('/api/report?name=universe.json'); renderNow(); renderTests(); } catch(e){} }
 async function loadData(){ const d=await j('/api/data'); $('#data').innerHTML = '<ul>'+d.map(root=>`<li><b>${root.root}</b><br><span>${Object.entries(root.kinds).map(([k,v])=>`${k}: ${v.files} files, ${(v.bytes/1048576).toFixed(0)} MB`).join(' · ')||'empty'}</span></li>`).join('')+'</ul>'; }
+function renderThinking(runs){
+  const wx = runs.find(r=>(r.strategy_state||{}).kind==='weather_lock' && (r.strategy_state.thinking||[]).length);
+  const th = wx ? wx.strategy_state.thinking : [];
+  // dead ones first: those are the ones that can actually be traded
+  th.sort((a,b)=> (b.verdict.startsWith('DEAD')?1:0)-(a.verdict.startsWith('DEAD')?1:0));
+  $('#wxThink tbody').innerHTML = th.slice(0,120).map(t=>`<tr>
+     <td>${t.ticker}</td><td>${t.station}</td><td>${t.bucket}</td>
+     <td>${t.observed==null?'–':t.observed.toFixed(0)+'°'}</td>
+     <td>${t.conservative==null?'–':t.conservative.toFixed(1)+'°'}</td>
+     <td>${t.needs==null?'–':t.needs.toFixed(0)+'°'}</td>
+     <td class="${t.verdict.startsWith('DEAD')?'pos':'muted'}">${t.verdict}${t.traded?' · traded':''}</td>
+     <td class="muted" style="text-align:left;white-space:normal">${t.explain||''}</td></tr>`).join('')
+     || '<tr><td colspan=8 class="muted">no weather run is reporting yet</td></tr>';
+
+  const cx = runs.find(r=>(r.strategy_state||{}).kind==='btc15m');
+  const s = cx ? cx.strategy_state : null;
+  $('#cryptoKpis').innerHTML = !s ? '' : [
+    ['index', s.spot!=null?Number(s.spot).toFixed(2):'–'],
+    ['volatility (annual)', s.sigma_annual!=null?(100*s.sigma_annual).toFixed(0)+'%':'–'],
+    ['volatility samples', `${s.vol_samples??'–'} / ${s.vol_min_samples??'–'}`],
+    ['index basis', s.basis!=null?Number(s.basis).toFixed(2):'–'],
+  ].map(([l,n])=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+  const ms = s ? (s.markets||[]) : [];
+  $('#cxThink tbody').innerHTML = ms.map(m=>`<tr>
+     <td>${m.ticker}</td>
+     <td>${m.index_plus_basis!=null?Number(m.index_plus_basis).toFixed(0):'–'}</td>
+     <td>${m.strike!=null?Number(m.strike).toFixed(0):'–'}</td>
+     <td class="${m.move_needed>0?'':'pos'}">${m.move_needed!=null?(m.move_needed>=0?'+':'')+Number(m.move_needed).toFixed(0):'–'}</td>
+     <td>${m.secs_left!=null?Number(m.secs_left).toFixed(0):'–'}</td>
+     <td>${m.one_sd_dollars!=null?Number(m.one_sd_dollars).toFixed(0):'–'}</td>
+     <td>${m.sds_away!=null&&isFinite(m.sds_away)?Number(m.sds_away).toFixed(2):'–'}</td>
+     <td>${m.fair!=null?(100*m.fair).toFixed(0)+'¢':'–'}</td>
+     <td class="muted" style="text-align:left;white-space:normal">${m.explain||''}</td></tr>`).join('')
+     || '<tr><td colspan=9 class="muted">no crypto run is reporting yet</td></tr>';
+}
+
 async function loadLogs(){ const files=await j('/api/logs'); const sel=$('#logSel'); const prev=sel.value; sel.innerHTML=files.map(f=>`<option value="${f.file}">${f.file}</option>`).join(''); if(files.find(f=>f.file===prev)) sel.value=prev; if(sel.value){ const t=await j('/api/logs?file='+encodeURIComponent(sel.value)+'&lines=200'); $('#log').textContent=(t.lines||[]).join('\n'); $('#log').scrollTop=$('#log').scrollHeight; } }
 $('#logSel').onchange=loadLogs;
 setInterval(()=>{ $('#clock').textContent=new Date().toLocaleTimeString(); },1000);

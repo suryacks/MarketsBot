@@ -522,6 +522,36 @@ impl Strategy for WeatherLock {
                            "rain_markets": self.rain_markets.len(),
                            "rain_today_mm": self.rain.iter().filter(|(_, (_, mm))| *mm > 0.0).map(|(s, (_, mm))| serde_json::json!({"station": s, "mm": mm})).collect::<Vec<_>>(),
                            "running_max": self.run_max.iter().map(|(s, (d, m))| serde_json::json!({"station": s, "day": d, "max_f": m, "min_f": self.run_min.get(s).map(|(_, v)| *v)})).collect::<Vec<_>>(),
-                           "markets": self.markets.iter().map(|(t, m)| serde_json::json!({"ticker": t, "series": m.series, "close_ts_ms": m.close_ts_ms, "lo": m.lo, "hi": m.hi})).collect::<Vec<_>>()})
+                           "markets": self.markets.iter().map(|(t, m)| serde_json::json!({"ticker": t, "series": m.series, "close_ts_ms": m.close_ts_ms, "lo": m.lo, "hi": m.hi})).collect::<Vec<_>>(),
+                           "tolerance_f": OBSERVATION_TOLERANCE_F,
+                           // The reasoning behind each market, so the dashboard can show the
+                           // arithmetic rather than only the conclusion.
+                           "thinking": self.markets.iter().filter_map(|(t, m)| {
+                               let station = self.cfg.stations.get(&m.series)?;
+                               let low = Self::is_low(&m.series);
+                               let (day, obs) = if low { *self.run_min.get(station)? } else { *self.run_max.get(station)? };
+                               if self.day_key(&m.series, m.close_ts_ms) != day {
+                                   return None; // a different day's market
+                               }
+                               let (bound, needs, dead) = if low {
+                                   let warmest = obs + OBSERVATION_TOLERANCE_F + self.cfg.margin_f;
+                                   (warmest, m.lo - 1.0, warmest <= m.lo - 1.0)
+                               } else {
+                                   let coolest = obs - OBSERVATION_TOLERANCE_F - self.cfg.margin_f;
+                                   (coolest, m.hi + 1.0, coolest >= m.hi + 1.0 && m.hi < 999.0)
+                               };
+                               let bucket = if m.hi >= 999.0 { format!("{}F or above", m.lo) }
+                                            else if m.lo <= -999.0 { format!("below {}F", m.hi + 1.0) }
+                                            else { format!("{}-{}F", m.lo, m.hi) };
+                               let explain = if low {
+                                   format!("{station} low so far {obs:.0}F; warmest it could really be {bound:.1}F; needs {needs:.0}F or colder to kill {bucket}")
+                               } else {
+                                   format!("{station} high so far {obs:.0}F; coolest it could really be {bound:.1}F; needs {needs:.0}F or hotter to kill {bucket}")
+                               };
+                               Some(serde_json::json!({"ticker": t, "station": station, "kind": if low {"min"} else {"max"},
+                                   "bucket": bucket, "observed": obs, "conservative": bound, "needs": needs,
+                                   "verdict": if dead { "DEAD - can be sold" } else { "still possible" },
+                                   "traded": self.traded.contains(t), "explain": explain}))
+                           }).collect::<Vec<_>>()})
     }
 }

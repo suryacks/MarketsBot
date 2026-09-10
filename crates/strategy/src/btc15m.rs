@@ -444,16 +444,40 @@ impl Strategy for Btc15mStrategy {
             .active
             .iter()
             .map(|(t, a)| {
+                // Publish the arithmetic, not just its answer: what price the index is at,
+                // how far the strike is in standard deviations, and what that makes the
+                // contract worth. Anyone should be able to check the number by hand.
+                let spot = self.spot.map(|(_, p)| p).unwrap_or(0.0) + self.effective_basis();
+                let tau = ((a.close_ts_ms - now) as f64 / 1000.0).max(0.0);
+                let te = crate::fair_value::effective_tau(tau, self.cfg.settle_avg_secs);
+                let sd = self.vol.sigma_per_sec() * te.max(0.0).sqrt();
+                let d = if sd > 0.0 && spot > 0.0 && a.strike > 0.0 { ((spot / a.strike).ln() - 0.5 * sd * sd) / sd } else { f64::NAN };
+                let fair = self.fair(t, now);
+                let warm = self.vol.realized.samples() >= self.cfg.vol_min_samples;
                 serde_json::json!({
                     "ticker": t,
                     "strike": a.strike,
                     "open_ts_ms": a.open_ts_ms,
                     "close_ts_ms": a.close_ts_ms,
-                    "fair": self.fair(t, now),
+                    "fair": fair,
                     "entries": a.entries,
                     "notional": a.notional,
                     "bid_quote": a.bid_order.map(|(_, p)| p.to_f64()),
                     "ask_quote": a.ask_order.map(|(_, p)| p.to_f64()),
+                    "index_plus_basis": spot,
+                    "secs_left": tau,
+                    "effective_secs": te,
+                    "move_needed": a.strike - spot,
+                    "one_sd_dollars": sd * spot,
+                    "sds_away": d,
+                    "explain": if !warm {
+                        format!("waiting for volatility: {}/{} samples", self.vol.realized.samples(), self.cfg.vol_min_samples)
+                    } else if !d.is_finite() {
+                        "no usable index or time left".to_string()
+                    } else {
+                        format!("index {:.0}, strike {:.0} — needs {:+.0} with {:.0}s left; one standard deviation is {:.0}, so the strike is {:.2} SD away → fair {:.0}%",
+                                spot, a.strike, a.strike - spot, tau, sd * spot, d, 100.0 * fair.unwrap_or(0.0))
+                    },
                 })
             })
             .collect();
