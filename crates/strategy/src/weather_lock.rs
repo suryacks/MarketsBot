@@ -108,6 +108,11 @@ impl WeatherLockConfig {
 struct Mkt {
     series: String,
     close_ts_ms: i64,
+    /// Last touch the strategy saw. Kept so the dashboard can say why a decided market
+    /// went untraded: the snapshot only publishes books we hold or have orders in, so
+    /// without this a dead bucket with no bid is indistinguishable from one we cannot see.
+    last_bid: Option<f64>,
+    last_ask: Option<f64>,
     /// (lo, hi): YES iff lo ≤ max ≤ hi (hi = 999 for "greater" strikes)
     lo: f64,
     hi: f64,
@@ -353,6 +358,13 @@ impl WeatherLock {
             .map(|(t, _)| t.clone())
             .collect();
         for t in tickers {
+            if let Some(b) = ctx.book(&t) {
+                let (bb, ba) = (b.best_bid().map(|(p, _)| p.to_f64()), b.best_ask().map(|(p, _)| p.to_f64()));
+                if let Some(mm) = self.markets.get_mut(&t) {
+                    mm.last_bid = bb;
+                    mm.last_ask = ba;
+                }
+            }
             let m = self.markets[&t].clone();
             // Observations only ever move one way within a day: the running maximum can
             // rise and the running minimum can fall. So each is a one-sided bound on the
@@ -452,7 +464,7 @@ impl Strategy for WeatherLock {
                 } else if self.cfg.stations.contains_key(&m.series)
                     && let Some((lo, hi)) = Self::parse_market(m)
                 {
-                    self.markets.insert(m.ticker.clone(), Mkt { series: m.series.clone(), close_ts_ms: m.close_ts_ms, lo, hi });
+                    self.markets.insert(m.ticker.clone(), Mkt { series: m.series.clone(), close_ts_ms: m.close_ts_ms, lo, hi, last_bid: None, last_ask: None });
                 }
             }
             MarketEvent::Ref(r) if r.source == "nowcast" => {
@@ -551,6 +563,7 @@ impl Strategy for WeatherLock {
                                Some(serde_json::json!({"ticker": t, "station": station, "kind": if low {"min"} else {"max"},
                                    "bucket": bucket, "observed": obs, "conservative": bound, "needs": needs,
                                    "verdict": if dead { "DEAD - can be sold" } else { "still possible" },
+                                   "bid": m.last_bid, "ask": m.last_ask,
                                    "traded": self.traded.contains(t), "explain": explain}))
                            }).collect::<Vec<_>>()})
     }

@@ -233,10 +233,9 @@ function renderThinking(runs){
   // than leaving "42 dead, 0 traded" to look like a fault.
   const blocked = t => {
     if (!t.verdict.startsWith('DEAD')) return ['', 'not decided yet'];
-    const b = books[t.ticker];
-    if (!b) return ['–', 'no orderbook'];
-    if (!b.bid) return ['–', 'nobody is bidding — nothing to sell into'];
-    const px = b.bid[0];
+    // the strategy reports the touch it saw; the snapshot's books are pruned
+    const px = t.bid;
+    if (px == null) return ['–', 'nobody is bidding — nothing to sell into'];
     if (px < 0.02) return [(100*px).toFixed(0)+'¢', 'bid below the 2¢ floor'];
     return [(100*px).toFixed(0)+'¢', t.traded ? 'already traded' : 'TRADEABLE'];
   };
